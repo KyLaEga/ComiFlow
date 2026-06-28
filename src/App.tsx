@@ -43,6 +43,10 @@ function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState('');
   
+  const [pendingFiles, setPendingFiles] = useState<FileList | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importTargetShelfId, setImportTargetShelfId] = useState<string | null>(null);
+  
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
@@ -100,8 +104,15 @@ function App() {
     });
   }, []);
 
+  // Start the import flow by opening the target shelf selector modal
+  const handleStartImportFlow = (files: FileList) => {
+    setPendingFiles(files);
+    setImportTargetShelfId(null);
+    setIsImportModalOpen(true);
+  };
+
   // Import files
-  const handleImportFiles = async (files: FileList) => {
+  const handleImportFiles = async (files: FileList, shelfId: string | null = null) => {
     setIsImporting(true);
     
     for (let i = 0; i < files.length; i++) {
@@ -126,12 +137,18 @@ function App() {
           setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
           const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
           await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
+          if (shelfId) {
+            await assignComicToShelf(id, shelfId);
+          }
         } else {
           setImportProgress(`Файл ${i + 1} из ${files.length}: Распаковка "${file.name}"...`);
           const parsed = await parseCBZ(file, file.name);
 
           setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
           await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
+          if (shelfId) {
+            await assignComicToShelf(id, shelfId);
+          }
         }
       } catch (err) {
         console.error('Error importing file:', err);
@@ -234,6 +251,7 @@ function App() {
     await saveShelf(id, name);
     const list = await getAllShelves();
     setShelves(list);
+    return id;
   };
 
   // Delete shelf (comics remain intact but lose reference)
@@ -288,7 +306,7 @@ function App() {
           comics={comics}
           onSelectComic={handleSelectComic}
           onDeleteComic={handleDeleteComic}
-          onImportFiles={handleImportFiles}
+          onImportFiles={handleStartImportFlow}
           isImporting={isImporting}
           importProgress={importProgress}
           shelves={shelves}
@@ -320,6 +338,84 @@ function App() {
         onUpdateSettings={handleUpdateSettings}
         onClearLibrary={handleClearLibrary}
       />
+
+      {/* Import Shelf Selection Modal */}
+      {isImportModalOpen && pendingFiles && (
+        <div className="settings-overlay active" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="settings-backdrop" onClick={() => setIsImportModalOpen(false)} />
+          <div className="settings-panel" style={{ transform: 'none', position: 'relative', width: '90%', maxWidth: '400px', height: 'auto', borderRadius: '24px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', overflow: 'hidden' }}>
+            <div className="settings-header">
+              <h3 className="settings-title">Импорт файлов</h3>
+            </div>
+            
+            <div className="settings-section">
+              <span className="settings-section-title">Выбранные файлы</span>
+              <p style={{ fontSize: '14px', margin: 0, color: 'var(--text-secondary)' }}>
+                Будет добавлено файлов: <strong>{pendingFiles.length}</strong>
+              </p>
+            </div>
+            
+            <div className="settings-section">
+              <span className="settings-section-title">Выберите полку</span>
+              <select
+                className="card-shelf-select"
+                style={{ fontSize: '13px', padding: '10px 32px 10px 12px' }}
+                value={importTargetShelfId || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setImportTargetShelfId(val === '' ? null : val);
+                }}
+              >
+                <option value="">Без полки (Главная)</option>
+                {shelves.map((shelf) => (
+                  <option key={shelf.id} value={shelf.id}>
+                    Полка: {shelf.name}
+                  </option>
+                ))}
+              </select>
+              
+              <button
+                className="shelf-tab-btn shelf-tab-btn-add"
+                style={{ width: '100%', marginTop: '4px', justifyContent: 'center', borderRadius: '12px' }}
+                onClick={() => {
+                  const name = prompt('Введите название новой полки:');
+                  if (name && name.trim()) {
+                    handleAddShelf(name.trim()).then((newId) => {
+                      setImportTargetShelfId(newId);
+                    });
+                  }
+                }}
+              >
+                + Создать новую полку
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  handleImportFiles(pendingFiles, importTargetShelfId);
+                  setPendingFiles(null);
+                }}
+              >
+                Импортировать
+              </button>
+              <button
+                className="btn"
+                style={{ flex: 1, backgroundColor: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}
+                onClick={() => {
+                  setIsImportModalOpen(false);
+                  setPendingFiles(null);
+                }}
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -80,13 +80,11 @@ export const Library: React.FC<LibraryProps> = ({
     const matchesSearch = comic.title.toLowerCase().includes(searchQuery.toLowerCase());
     if (!matchesSearch) return false;
     
-    if (activeShelfId === 'uncategorized') {
-      return !comic.shelfId;
-    }
     if (activeShelfId !== null) {
       return comic.shelfId === activeShelfId;
     }
-    return true;
+    // If activeShelfId is null ("Все файлы"), hide shelved files
+    return !comic.shelfId;
   });
 
   const sortedComics = [...filteredComics].sort((a, b) => {
@@ -138,12 +136,6 @@ export const Library: React.FC<LibraryProps> = ({
           onClick={() => setActiveShelfId(null)}
         >
           Все файлы
-        </button>
-        <button
-          className={`shelf-tab-btn ${activeShelfId === 'uncategorized' ? 'active' : ''}`}
-          onClick={() => setActiveShelfId('uncategorized')}
-        >
-          Без полки
         </button>
         {shelves.map((shelf) => (
           <button
