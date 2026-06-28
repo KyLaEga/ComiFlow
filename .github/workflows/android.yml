@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -13,6 +15,8 @@ jobs:
   build:
     name: Build Android App
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to upload releases
 
     steps:
       - name: Checkout Source
@@ -50,8 +54,29 @@ jobs:
           cd android
           ./gradlew assembleDebug
 
-      - name: Upload Debug APK
+      - name: Rename APK for Release
+        run: |
+          mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/ComiFlow.apk
+
+      - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ComiFlow-Debug-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/ComiFlow.apk
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'ComiFlow Latest Build' }}
+          body: |
+            Автоматическая сборка приложения ComiFlow.
+            
+            **Последний коммит:** `${{ github.event.head_commit.message }}`
+            **Дата сборки:** ${{ github.event.head_commit.timestamp }}
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          files: android/app/build/outputs/apk/debug/ComiFlow.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
