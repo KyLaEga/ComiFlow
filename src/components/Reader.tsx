@@ -40,6 +40,12 @@ export const Reader: React.FC<ReaderProps> = ({
   const startDragOffset = useRef({ x: 0, y: 0 });
   const lastTapTime = useRef(0);
   const latestLoadId = useRef(0);
+  
+  // Touch swipe states
+  const [swipeTranslation, setSwipeTranslation] = useState(0);
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+  const isSwipeDragging = useRef(false);
 
   // Webtoon scroll images URLs
   const [webtoonPageUrls, setWebtoonPageUrls] = useState<string[]>([]);
@@ -333,10 +339,17 @@ export const Reader: React.FC<ReaderProps> = ({
     lastTapTime.current = now;
   };
 
-  // Pointer dragging (Panning when zoomed)
+  // Pointer dragging (Panning when zoomed, swiping when 1x zoom)
   const handlePointerDown = (e: React.PointerEvent) => {
     if (zoomScale === 1) {
       handleDoubleTap(e.clientX, e.clientY);
+      // Track swipes only in paged mode
+      if (settings.mode === 'paged') {
+        touchStartX.current = e.clientX;
+        touchStartY.current = e.clientY;
+        isSwipeDragging.current = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
       return;
     }
     isDragging.current = true;
@@ -348,6 +361,17 @@ export const Reader: React.FC<ReaderProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (zoomScale === 1) {
+      if (!isSwipeDragging.current) return;
+      const deltaX = e.clientX - touchStartX.current;
+      const deltaY = e.clientY - touchStartY.current;
+      
+      // If horizontal movement is dominant, capture swipe preview translation
+      if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+        setSwipeTranslation(deltaX);
+      }
+      return;
+    }
     if (!isDragging.current) return;
     const newX = e.clientX - startDragOffset.current.x;
     const newY = e.clientY - startDragOffset.current.y;
@@ -357,6 +381,24 @@ export const Reader: React.FC<ReaderProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (zoomScale === 1) {
+      if (!isSwipeDragging.current) return;
+      isSwipeDragging.current = false;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      
+      const deltaX = e.clientX - touchStartX.current;
+      setSwipeTranslation(0); // Trigger snap back transition
+      
+      // Trigger page turn if dragged threshold exceeded
+      if (Math.abs(deltaX) > 80) {
+        if (deltaX > 0) {
+          turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
+        } else {
+          turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
+        }
+      }
+      return;
+    }
     isDragging.current = false;
     e.currentTarget.releasePointerCapture(e.pointerId);
   };
@@ -455,7 +497,8 @@ export const Reader: React.FC<ReaderProps> = ({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               style={{
-                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
+                transform: `translate(${panOffset.x + swipeTranslation}px, ${panOffset.y}px) scale(${zoomScale})`,
+                transition: swipeTranslation === 0 ? 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none',
                 cursor: zoomScale > 1 ? 'grab' : 'default',
               }}
             >
