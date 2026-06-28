@@ -100,14 +100,14 @@ export const Library: React.FC<LibraryProps> = ({
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept=".cbz,.zip"
+          accept=".cbz,.zip,.pdf"
           multiple
           style={{ display: 'none' }}
         />
         <div className="dropzone-icon">
           <Plus size={32} />
         </div>
-        <div className="dropzone-text">Загрузите комиксы (.cbz, .zip)</div>
+        <div className="dropzone-text">Загрузите файлы (.cbz, .zip, .pdf)</div>
         <div className="dropzone-subtext">
           Перетащите файлы сюда или нажмите для выбора на устройстве
         </div>
@@ -230,7 +230,7 @@ export const Library: React.FC<LibraryProps> = ({
             Ваша библиотека пуста
           </h2>
           <p style={{ maxWidth: '400px', margin: '0 auto', fontSize: '15px' }}>
-            Загрузите свои любимые веб-комиксы, мангу или классические комиксы в формате .cbz или .zip, чтобы начать чтение.
+            Загрузите свои любимые комиксы, мангу или книги в формате .cbz, .zip или .pdf, чтобы начать чтение.
           </p>
         </div>
       )}

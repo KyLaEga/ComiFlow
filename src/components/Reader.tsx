@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { updateComicProgress } from '../utils/db';
 import type { ComicMetadata } from '../utils/db';
 import { getPageBlob, clearCBZCache } from '../utils/cbz';
+import { getPdfPageBlob, clearPDFCache } from '../utils/pdf';
 import type { ReaderSettings } from './Settings';
 import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -49,11 +50,20 @@ export const Reader: React.FC<ReaderProps> = ({
     setPanOffset({ x: 0, y: 0 });
   }, []);
 
+  // Helper to fetch page Blob depending on format
+  const fetchPageBlob = useCallback(async (index: number): Promise<Blob> => {
+    if (comic.format === 'pdf') {
+      return await getPdfPageBlob(comic.id, fileBlob, index + 1);
+    } else {
+      return await getPageBlob(comic.id, fileBlob, comic.pages[index]);
+    }
+  }, [comic.id, comic.pages, comic.format, fileBlob]);
+
   // Prefetch adjacent page
   const prefetchNextPage = useCallback(async (nextIdx: number) => {
     if (nextIdx >= 0 && nextIdx < comic.pages.length) {
       try {
-        const nextBlob = await getPageBlob(comic.id, fileBlob, comic.pages[nextIdx]);
+        const nextBlob = await fetchPageBlob(nextIdx);
         const url = URL.createObjectURL(nextBlob);
         setNextPageUrl(url);
       } catch (err) {
@@ -62,7 +72,7 @@ export const Reader: React.FC<ReaderProps> = ({
     } else {
       setNextPageUrl(null);
     }
-  }, [comic.id, comic.pages, fileBlob]);
+  }, [comic.pages.length, fetchPageBlob]);
 
   // Load a single page for paged mode
   const loadPage = useCallback(async (index: number) => {
@@ -78,7 +88,7 @@ export const Reader: React.FC<ReaderProps> = ({
         setPageUrl(nextPageUrl);
         setNextPageUrl(null);
       } else {
-        const blob = await getPageBlob(comic.id, fileBlob, comic.pages[index]);
+        const blob = await fetchPageBlob(index);
         const url = URL.createObjectURL(blob);
         setPageUrl(url);
       }
@@ -98,7 +108,7 @@ export const Reader: React.FC<ReaderProps> = ({
     } finally {
       setIsLoadingPage(false);
     }
-  }, [comic.id, comic.pages, fileBlob, currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage]);
+  }, [currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
 
   // Load all pages for Webtoon mode
   const loadAllWebtoonPages = useCallback(async () => {
@@ -110,7 +120,7 @@ export const Reader: React.FC<ReaderProps> = ({
       const urls: string[] = [];
       // To prevent lagging, load them sequentially
       for (let i = 0; i < comic.pages.length; i++) {
-        const blob = await getPageBlob(comic.id, fileBlob, comic.pages[i]);
+        const blob = await fetchPageBlob(i);
         urls.push(URL.createObjectURL(blob));
       }
       setWebtoonPageUrls(urls);
@@ -127,7 +137,7 @@ export const Reader: React.FC<ReaderProps> = ({
     } finally {
       setIsLoadingPage(false);
     }
-  }, [comic.id, comic.pages, fileBlob, currentPage]);
+  }, [comic.pages.length, fetchPageBlob, webtoonPageUrls, currentPage]);
 
   // Init mode transitions
   useEffect(() => {
@@ -143,6 +153,7 @@ export const Reader: React.FC<ReaderProps> = ({
       if (nextPageUrl) URL.revokeObjectURL(nextPageUrl);
       webtoonPageUrls.forEach(url => URL.revokeObjectURL(url));
       clearCBZCache();
+      clearPDFCache();
     };
   }, [settings.mode]);
 

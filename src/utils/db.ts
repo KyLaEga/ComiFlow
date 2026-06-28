@@ -12,6 +12,7 @@ export interface ComicMetadata {
   pages: string[]; // List of file names inside the zip (sorted)
   coverUrl?: string; // Temporarily created Object URL for rendering
   coverBlob: Blob; // Saved Blob of the first page
+  format?: 'cbz' | 'pdf'; // File format
 }
 
 // Stores
@@ -62,7 +63,8 @@ export async function saveComic(
   size: number,
   pages: string[],
   coverBlob: Blob,
-  fileBlob: Blob
+  fileBlob: Blob,
+  format: 'cbz' | 'pdf'
 ): Promise<ComicMetadata> {
   const metadata: ComicMetadata = {
     id,
@@ -74,6 +76,7 @@ export async function saveComic(
     totalPages: pages.length,
     pages,
     coverBlob,
+    format,
   };
 
   // Save metadata

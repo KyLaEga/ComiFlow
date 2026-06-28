@@ -12,6 +12,7 @@ import {
 } from './utils/db';
 import type { ComicMetadata } from './utils/db';
 import { parseCBZ } from './utils/cbz';
+import { parsePDF } from './utils/pdf';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
 import './App.css';
 
@@ -90,21 +91,33 @@ function App() {
       const file = files[i];
       const lowerName = file.name.toLowerCase();
       
-      if (!lowerName.endsWith('.cbz') && !lowerName.endsWith('.zip')) {
-        alert(`Файл "${file.name}" имеет неподдерживаемый формат. Используйте файлы .cbz или .zip.`);
+      const isPdf = lowerName.endsWith('.pdf');
+      const isCbz = lowerName.endsWith('.cbz') || lowerName.endsWith('.zip');
+      
+      if (!isPdf && !isCbz) {
+        alert(`Файл "${file.name}" имеет неподдерживаемый формат. Используйте файлы .cbz, .zip или .pdf.`);
         continue;
       }
 
       try {
-        setImportProgress(`Файл ${i + 1} из ${files.length}: Распаковка "${file.name}"...`);
-        const parsed = await parseCBZ(file, file.name);
-
-        setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
         const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
         
-        await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file);
+        if (isPdf) {
+          setImportProgress(`Файл ${i + 1} из ${files.length}: Чтение PDF "${file.name}"...`);
+          const parsed = await parsePDF(file, file.name);
+
+          setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
+          const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
+          await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
+        } else {
+          setImportProgress(`Файл ${i + 1} из ${files.length}: Распаковка "${file.name}"...`);
+          const parsed = await parseCBZ(file, file.name);
+
+          setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
+          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
+        }
       } catch (err) {
-        console.error('Error importing comic:', err);
+        console.error('Error importing file:', err);
         alert(`Не удалось загрузить "${file.name}": ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
       }
     }
