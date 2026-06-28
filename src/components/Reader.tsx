@@ -39,6 +39,7 @@ export const Reader: React.FC<ReaderProps> = ({
   const isDragging = useRef(false);
   const startDragOffset = useRef({ x: 0, y: 0 });
   const lastTapTime = useRef(0);
+  const latestLoadId = useRef(0);
 
   // Webtoon scroll images URLs
   const [webtoonPageUrls, setWebtoonPageUrls] = useState<string[]>([]);
@@ -77,21 +78,36 @@ export const Reader: React.FC<ReaderProps> = ({
   // Load a single page for paged mode
   const loadPage = useCallback(async (index: number) => {
     setIsLoadingPage(true);
+    const loadId = ++latestLoadId.current;
     try {
       // Clear previous page url to avoid memory leaks
       if (pageUrl && pageUrl !== nextPageUrl) {
         URL.revokeObjectURL(pageUrl);
       }
 
+      // If we jumped to a page that isn't the next page, revoke prefetch to prevent memory leak
+      if (nextPageUrl && index !== currentPage + 1) {
+        URL.revokeObjectURL(nextPageUrl);
+        setNextPageUrl(null);
+      }
+
+      let newUrl: string;
       // If we already prefetched this page, use it!
       if (nextPageUrl && index === currentPage + 1) {
-        setPageUrl(nextPageUrl);
+        newUrl = nextPageUrl;
         setNextPageUrl(null);
       } else {
         const blob = await fetchPageBlob(index);
-        const url = URL.createObjectURL(blob);
-        setPageUrl(url);
+        newUrl = URL.createObjectURL(blob);
       }
+
+      // If this request was superseded by a newer page turn, abort and clean up
+      if (loadId !== latestLoadId.current) {
+        URL.revokeObjectURL(newUrl);
+        return;
+      }
+
+      setPageUrl(newUrl);
 
       if (!settings.zoomLock) {
         resetZoom();
@@ -104,9 +120,13 @@ export const Reader: React.FC<ReaderProps> = ({
       const nextIdx = index + (settings.direction === 'ltr' ? 1 : -1);
       prefetchNextPage(nextIdx);
     } catch (err) {
-      console.error('Error loading page:', err);
+      if (loadId === latestLoadId.current) {
+        console.error('Error loading page:', err);
+      }
     } finally {
-      setIsLoadingPage(false);
+      if (loadId === latestLoadId.current) {
+        setIsLoadingPage(false);
+      }
     }
   }, [currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
 
@@ -243,6 +263,23 @@ export const Reader: React.FC<ReaderProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [settings.mode, settings.volumeKeysEnabled, settings.direction, turnPage]);
+
+  // Listener for native volume keys override (dispatched from Java)
+  useEffect(() => {
+    const handleNativeVolumeKey = (e: Event) => {
+      if (!settings.volumeKeysEnabled) return;
+      const customEvent = e as CustomEvent<{ key: 'volume_up' | 'volume_down' }>;
+      const keyType = customEvent.detail.key;
+      if (keyType === 'volume_up') {
+        turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
+      } else if (keyType === 'volume_down') {
+        turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
+      }
+    };
+
+    window.addEventListener('nativeVolumeKey', handleNativeVolumeKey);
+    return () => window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
+  }, [settings.volumeKeysEnabled, settings.direction, turnPage]);
 
   // Webtoon scroll listener to track page progress
   const handleWebtoonScroll = () => {

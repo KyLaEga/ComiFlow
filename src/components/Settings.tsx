@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2 } from 'lucide-react';
 
 export interface ReaderSettings {
@@ -28,6 +28,29 @@ export const Settings: React.FC<SettingsProps> = ({
   onUpdateSettings,
   onClearLibrary,
 }) => {
+  const [storageUsage, setStorageUsage] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen && navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then((estimate) => {
+        const usage = estimate.usage || 0;
+        const quota = estimate.quota || 0;
+        
+        const formatSize = (bytes: number) => {
+          const mb = bytes / (1024 * 1024);
+          if (mb >= 1024) {
+            return `${(mb / 1024).toFixed(1)} ГБ`;
+          }
+          return `${mb.toFixed(0)} МБ`;
+        };
+        
+        setStorageUsage(`Хранилище: ${formatSize(usage)} из ${formatSize(quota)}`);
+      }).catch(err => {
+        console.warn('Failed to fetch storage estimate:', err);
+      });
+    }
+  }, [isOpen]);
+
   return (
     <div className={`settings-overlay ${isOpen ? 'active' : ''}`}>
       <div className="settings-backdrop" onClick={onClose} />
@@ -228,6 +251,11 @@ export const Settings: React.FC<SettingsProps> = ({
 
         {/* Danger zone / Clear Library */}
         <div className="settings-section" style={{ marginTop: 'auto', paddingTop: '20px' }}>
+          {storageUsage && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '12px' }}>
+              {storageUsage}
+            </div>
+          )}
           <button 
             className="btn btn-danger" 
             onClick={() => {
