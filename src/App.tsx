@@ -8,9 +8,13 @@ import {
   getComicFile, 
   deleteComic, 
   saveComic, 
-  initDb 
+  initDb,
+  getAllShelves,
+  saveShelf,
+  deleteShelf,
+  assignComicToShelf
 } from './utils/db';
-import type { ComicMetadata } from './utils/db';
+import type { ComicMetadata, Shelf } from './utils/db';
 import { parseCBZ } from './utils/cbz';
 import { parsePDF } from './utils/pdf';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
@@ -41,8 +45,9 @@ function App() {
   
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
+  const [shelves, setShelves] = useState<Shelf[]>([]);
 
-  // Initialize DB and Load Settings & Comics
+  // Initialize DB and Load Settings, Comics & Shelves
   useEffect(() => {
     initDb();
     
@@ -66,7 +71,19 @@ function App() {
         console.error('Failed to load library:', err);
       }
     };
+    
+    // Load shelves from DB
+    const loadShelves = async () => {
+      try {
+        const list = await getAllShelves();
+        setShelves(list);
+      } catch (err) {
+        console.error('Failed to load shelves:', err);
+      }
+    };
+
     loadComics();
+    loadShelves();
   }, []);
 
   // Apply Theme Attribute to HTML Element
@@ -211,8 +228,36 @@ function App() {
     }
   };
 
+  // Add new shelf
+  const handleAddShelf = async (name: string) => {
+    const id = `shelf_${Date.now()}`;
+    await saveShelf(id, name);
+    const list = await getAllShelves();
+    setShelves(list);
+  };
+
+  // Delete shelf (comics remain intact but lose reference)
+  const handleDeleteShelf = async (id: string) => {
+    await deleteShelf(id);
+    const sList = await getAllShelves();
+    setShelves(sList);
+    // Refresh comics listing since shelfIds were set to null
+    const cList = await getAllComics();
+    setComics(cList);
+  };
+
+  // Assign comic to shelf
+  const handleAssignComicToShelf = async (comicId: string, shelfId: string | null) => {
+    await assignComicToShelf(comicId, shelfId);
+    const list = await getAllComics();
+    setComics(list);
+  };
+
   // Active comic metadata helper
   const activeComic = comics.find((c) => c.id === activeComicId);
+  const shelfComics = activeComic 
+    ? comics.filter(c => c.shelfId === activeComic.shelfId)
+    : [];
 
   return (
     <>
@@ -246,17 +291,24 @@ function App() {
           onImportFiles={handleImportFiles}
           isImporting={isImporting}
           importProgress={importProgress}
+          shelves={shelves}
+          onAddShelf={handleAddShelf}
+          onDeleteShelf={handleDeleteShelf}
+          onAssignComicToShelf={handleAssignComicToShelf}
         />
       )}
 
       {/* Reader View */}
       {activeComicId && activeComic && activeComicFile && (
         <Reader
+          key={activeComic.id}
           comic={activeComic}
           fileBlob={activeComicFile}
           settings={settings}
           onClose={handleCloseReader}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          shelfComics={shelfComics}
+          onSelectComic={handleSelectComic}
         />
       )}
 

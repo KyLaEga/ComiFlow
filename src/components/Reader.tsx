@@ -4,7 +4,7 @@ import type { ComicMetadata } from '../utils/db';
 import { getPageBlob, clearCBZCache } from '../utils/cbz';
 import { getPdfPageBlob, clearPDFCache } from '../utils/pdf';
 import type { ReaderSettings } from './Settings';
-import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X } from 'lucide-react';
 
 
 interface ReaderProps {
@@ -13,6 +13,8 @@ interface ReaderProps {
   settings: ReaderSettings;
   onClose: () => void;
   onOpenSettings: () => void;
+  shelfComics: ComicMetadata[];
+  onSelectComic: (id: string) => void;
 }
 
 export const Reader: React.FC<ReaderProps> = ({
@@ -21,12 +23,21 @@ export const Reader: React.FC<ReaderProps> = ({
   settings,
   onClose,
   onOpenSettings,
+  shelfComics,
+  onSelectComic,
 }) => {
   const [currentPage, setCurrentPage] = useState(comic.currentPage);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [showNextOverlay, setShowNextOverlay] = useState(false);
   const [pageUrl, setPageUrl] = useState<string | null>(null);
   const [nextPageUrl, setNextPageUrl] = useState<string | null>(null);
   const [isLoadingPage, setIsLoadingPage] = useState(false);
   const [isHudActive, setIsHudActive] = useState(true);
+  
+  // Find next comic on this shelf
+  const sortedShelfComics = [...shelfComics].sort((a, b) => a.title.localeCompare(b.title));
+  const currentIdx = sortedShelfComics.findIndex((c) => c.id === comic.id);
+  const nextComic = currentIdx !== -1 && currentIdx < sortedShelfComics.length - 1 ? sortedShelfComics[currentIdx + 1] : null;
 
   // Split state for landscape pages
   const [isLandscape, setIsLandscape] = useState(false);
@@ -219,6 +230,8 @@ export const Reader: React.FC<ReaderProps> = ({
       if (currentPage < comic.totalPages - 1) {
         setCurrentPage((prev) => prev + 1);
         setSplitPart(null);
+      } else if (nextComic) {
+        setShowNextOverlay(true);
       }
     } else {
       if (currentPage > 0) {
@@ -226,7 +239,7 @@ export const Reader: React.FC<ReaderProps> = ({
         setSplitPart(null);
       }
     }
-  }, [currentPage, comic.totalPages, settings.direction, settings.splitDoublePages, isLandscape, splitPart]);
+  }, [currentPage, comic.totalPages, settings.direction, settings.splitDoublePages, isLandscape, splitPart, nextComic]);
 
   // Image load helper to detect aspect ratio
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -433,6 +446,16 @@ export const Reader: React.FC<ReaderProps> = ({
         </button>
         <span className="hud-title">{comic.title}</span>
         <div className="hud-actions">
+          {shelfComics.length > 1 && (
+            <button 
+              className="btn-icon" 
+              onClick={() => setIsDrawerOpen(true)} 
+              title="Выпуски на полке"
+              style={{ marginRight: '4px' }}
+            >
+              <LayoutGrid size={20} />
+            </button>
+          )}
           <button className="btn-icon" onClick={onOpenSettings} aria-label="Настройки">
             <SettingsIcon size={20} />
           </button>
@@ -580,6 +603,77 @@ export const Reader: React.FC<ReaderProps> = ({
           </span>
         </div>
       </div>
+
+      {/* Shelf issues bottom sheet drawer */}
+      {shelfComics.length > 1 && (
+        <div className={`reader-drawer-overlay ${isDrawerOpen ? 'active' : ''}`} onClick={() => setIsDrawerOpen(false)}>
+          <div className="reader-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-header">
+              <span className="drawer-title">Выпуски на полке</span>
+              <button className="btn-icon" onClick={() => setIsDrawerOpen(false)} aria-label="Закрыть">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="drawer-comic-list">
+              {shelfComics.map((c) => (
+                <div
+                  key={c.id}
+                  className={`drawer-comic-card ${c.id === comic.id ? 'active' : ''}`}
+                  onClick={() => {
+                    if (c.id !== comic.id) {
+                      onSelectComic(c.id);
+                      setIsDrawerOpen(false);
+                    }
+                  }}
+                >
+                  <div className="drawer-cover-wrapper">
+                    {c.coverUrl && (
+                      <img
+                        src={c.coverUrl}
+                        alt={c.title}
+                        className="drawer-cover"
+                      />
+                    )}
+                  </div>
+                  <span className="drawer-comic-title">{c.title}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Next Issue Auto-Turn Overlay */}
+      {showNextOverlay && nextComic && (
+        <div className="next-issue-overlay">
+          <div className="next-issue-card">
+            <span className="next-issue-badge">Выпуск прочитан!</span>
+            {nextComic.coverUrl && (
+              <img src={nextComic.coverUrl} alt={nextComic.title} className="next-issue-cover" />
+            )}
+            <h4 className="next-issue-title">Открыть следующий выпуск?</h4>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>{nextComic.title}</p>
+            <div className="next-issue-actions">
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  onSelectComic(nextComic.id);
+                  setShowNextOverlay(false);
+                }}
+              >
+                Читать следующий
+              </button>
+              <button
+                className="btn btn-danger"
+                style={{ border: '1px solid var(--border-color)', backgroundColor: 'transparent', color: 'var(--text-secondary)' }}
+                onClick={() => setShowNextOverlay(false)}
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import type { ComicMetadata } from '../utils/db';
+import type { ComicMetadata, Shelf } from '../utils/db';
 import { BookOpen, Plus, Search, Trash2, FolderOpen, AlertTriangle } from 'lucide-react';
 
 
@@ -10,6 +10,10 @@ interface LibraryProps {
   onImportFiles: (files: FileList) => void;
   isImporting: boolean;
   importProgress: string;
+  shelves: Shelf[];
+  onAddShelf: (name: string) => void;
+  onDeleteShelf: (id: string) => void;
+  onAssignComicToShelf: (comicId: string, shelfId: string | null) => void;
 }
 
 export const Library: React.FC<LibraryProps> = ({
@@ -19,10 +23,15 @@ export const Library: React.FC<LibraryProps> = ({
   onImportFiles,
   isImporting,
   importProgress,
+  shelves,
+  onAddShelf,
+  onDeleteShelf,
+  onAssignComicToShelf,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent'>('added');
   const [isDragActive, setIsDragActive] = useState(false);
+  const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -67,9 +76,18 @@ export const Library: React.FC<LibraryProps> = ({
   };
 
   // Filter and Sort comics
-  const filteredComics = comics.filter((comic) =>
-    comic.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredComics = comics.filter((comic) => {
+    const matchesSearch = comic.title.toLowerCase().includes(searchQuery.toLowerCase());
+    if (!matchesSearch) return false;
+    
+    if (activeShelfId === 'uncategorized') {
+      return !comic.shelfId;
+    }
+    if (activeShelfId !== null) {
+      return comic.shelfId === activeShelfId;
+    }
+    return true;
+  });
 
   const sortedComics = [...filteredComics].sort((a, b) => {
     if (sortBy === 'title') {
@@ -111,6 +129,57 @@ export const Library: React.FC<LibraryProps> = ({
         <div className="dropzone-subtext">
           Перетащите файлы сюда или нажмите для выбора на устройстве
         </div>
+      </div>
+
+      {/* Shelves/Folders Tabs */}
+      <div className="shelves-tab-container">
+        <button
+          className={`shelf-tab-btn ${activeShelfId === null ? 'active' : ''}`}
+          onClick={() => setActiveShelfId(null)}
+        >
+          Все файлы
+        </button>
+        <button
+          className={`shelf-tab-btn ${activeShelfId === 'uncategorized' ? 'active' : ''}`}
+          onClick={() => setActiveShelfId('uncategorized')}
+        >
+          Без полки
+        </button>
+        {shelves.map((shelf) => (
+          <button
+            key={shelf.id}
+            className={`shelf-tab-btn ${activeShelfId === shelf.id ? 'active' : ''}`}
+            onClick={() => setActiveShelfId(shelf.id)}
+          >
+            {shelf.name}
+            <span
+              className="btn-delete-shelf"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`Удалить полку "${shelf.name}"? Книги не будут удалены.`)) {
+                  onDeleteShelf(shelf.id);
+                  if (activeShelfId === shelf.id) {
+                    setActiveShelfId(null);
+                  }
+                }
+              }}
+              title="Удалить полку"
+            >
+              ×
+            </span>
+          </button>
+        ))}
+        <button
+          className="shelf-tab-btn shelf-tab-btn-add"
+          onClick={() => {
+            const name = prompt('Введите название новой полки:');
+            if (name && name.trim()) {
+              onAddShelf(name.trim());
+            }
+          }}
+        >
+          <Plus size={14} /> Новая полка
+        </button>
       </div>
 
       {/* Library Controls */}
@@ -206,6 +275,26 @@ export const Library: React.FC<LibraryProps> = ({
                   <div className="card-meta">
                     <span>{comic.totalPages} стр.</span>
                     <span>{formatBytes(comic.size)}</span>
+                  </div>
+                  
+                  {/* Shelf select dropdown */}
+                  <div className="card-shelf-select-container">
+                    <select
+                      className="card-shelf-select"
+                      value={comic.shelfId || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        onAssignComicToShelf(comic.id, val === '' ? null : val);
+                      }}
+                      onClick={(e) => e.stopPropagation()} // Prevent card opening reader
+                    >
+                      <option value="">Без полки</option>
+                      {shelves.map((shelf) => (
+                        <option key={shelf.id} value={shelf.id}>
+                          Полка: {shelf.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>

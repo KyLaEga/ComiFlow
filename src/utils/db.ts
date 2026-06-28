@@ -13,14 +13,16 @@ export interface ComicMetadata {
   coverUrl?: string; // Temporarily created Object URL for rendering
   coverBlob: Blob; // Saved Blob of the first page
   format?: 'cbz' | 'pdf'; // File format
+  shelfId?: string | null; // Shelf ID this comic belongs to
 }
 
 // Stores
 let metadataStore: LocalForage;
 let fileStore: LocalForage;
+let shelvesStore: LocalForage;
 
 export const initDb = () => {
-  if (metadataStore && fileStore) return;
+  if (metadataStore && fileStore && shelvesStore) return;
 
   metadataStore = localforage.createInstance({
     name: 'ComiFlow',
@@ -32,6 +34,12 @@ export const initDb = () => {
     name: 'ComiFlow',
     storeName: 'comics_files',
     description: 'Raw binary CBZ files',
+  });
+
+  shelvesStore = localforage.createInstance({
+    name: 'ComiFlow',
+    storeName: 'comics_shelves',
+    description: 'User shelves / folders to organize comics',
   });
 };
 
@@ -77,6 +85,7 @@ export async function saveComic(
     pages,
     coverBlob,
     format,
+    shelfId: null,
   };
 
   // Save metadata
@@ -118,3 +127,65 @@ export async function deleteComic(id: string): Promise<void> {
   await metadataStore.removeItem(id);
   await fileStore.removeItem(id);
 }
+
+// Shelves API
+export interface Shelf {
+  id: string;
+  name: string;
+  addedAt: number;
+}
+
+/**
+ * Get all shelves in the database
+ */
+export async function getAllShelves(): Promise<Shelf[]> {
+  const list: Shelf[] = [];
+  await shelvesStore.iterate<Shelf, void>((value) => {
+    list.push(value);
+  });
+  return list.sort((a, b) => b.addedAt - a.addedAt);
+}
+
+/**
+ * Create or rename a shelf
+ */
+export async function saveShelf(id: string, name: string): Promise<Shelf> {
+  const shelf: Shelf = {
+    id,
+    name,
+    addedAt: Date.now(),
+  };
+  await shelvesStore.setItem(id, shelf);
+  return shelf;
+}
+
+/**
+ * Delete a shelf and set all comics on it to uncategorized (null)
+ */
+export async function deleteShelf(id: string): Promise<void> {
+  await shelvesStore.removeItem(id);
+  
+  const comicsToUpdate: ComicMetadata[] = [];
+  await metadataStore.iterate<ComicMetadata, void>((value) => {
+    if (value.shelfId === id) {
+      value.shelfId = null;
+      comicsToUpdate.push(value);
+    }
+  });
+
+  for (const comic of comicsToUpdate) {
+    await metadataStore.setItem(comic.id, comic);
+  }
+}
+
+/**
+ * Assign a comic to a shelf
+ */
+export async function assignComicToShelf(comicId: string, shelfId: string | null): Promise<void> {
+  const metadata = await metadataStore.getItem<ComicMetadata>(comicId);
+  if (metadata) {
+    metadata.shelfId = shelfId;
+    await metadataStore.setItem(comicId, metadata);
+  }
+}
+
