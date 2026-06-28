@@ -1,32 +1,88 @@
-# React + TypeScript + Vite
+# ComiFlow — Премиальный CBZ/ZIP Comic Reader для Android
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+**ComiFlow** — современное, высокопроизводительное PWA-приложение для чтения комиксов и манги в формате `.cbz` и `.zip` с нативным Android-контейнером на базе Capacitor.
 
-Currently, two official plugins are available:
+Разработано для максимальной плавности, удобства чтения на экранах телефонов и планшетов, а также полноценной работы **офлайн**.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 🚀 Основные возможности
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Чтение и отображение
+*   **Два режима чтения**:
+    *   *Постранично (Paged)* — классическое перелистывание свайпами и тапами по краям.
+    *   *Вертикальная лента (Webtoon)* — бесконечная вертикальная прокрутка (оптимально для веб-тун манхвы).
+*   **Умное разделение разворотов (Double Spread Split)**: Автоматически разделяет широкие (ландшафтные) страницы скана на две отдельные портретные страницы для комфортного чтения на узких экранах смартфонов.
+*   **Поддержка манги (RTL)**: Чтение справа налево.
+*   **Адаптивное масштабирование**: Жесты Double Tap to Zoom (двойное касание для быстрого зума) и свободное перемещение (Panning) увеличенной страницы.
+*   **Настройки масштаба (Zoom Lock)**: Опция сохранения текущего зума при перелистывании страниц.
 
-## Expanding the Oxlint configuration
+### Обработка изображений и кастомизация
+*   **Фильтры Яркости и Контрастности**: Слайдеры в настройках позволяют скорректировать качество сканов прямо во время чтения.
+*   **Три премиальные темы**:
+    *   `Светлая` тема для чтения днем.
+    *   `Темная` тема для вечернего времени.
+    *   `OLED Black` — абсолютно черный фон для максимальной экономии заряда аккумулятора на OLED/AMOLED дисплеях.
+*   **Управление кнопками громкости**: Листайте страницы кнопками регулировки громкости вашего смартфона (опция включается в настройках).
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+### Производительность и Хранение
+*   **Мгновенный запуск**: Использование IndexedDB (через LocalForage) для локального хранения вашей библиотеки.
+*   **Оптимизация памяти**: Бинарный CBZ-файл распаковывается "на лету" — страницы извлекаются из ZIP по требованию и кэшируются, предотвращая перегрузку оперативной памяти (ОЗУ) телефона.
+*   **Сжатие обложек**: При импорте извлекается только первая страница в качестве обложки, что позволяет загружать список книг мгновенно без чтения тяжелых архивов.
+*   **Поиск и сортировка**: Удобный поиск по названиям, сортировка по дате добавления, алфавиту или времени последнего чтения.
+*   **Офлайн-режим (PWA)**: Благодаря встроенному Service Worker приложение работает без доступа к интернету.
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+---
+
+## 🛠️ Стек технологий
+
+*   **Core**: React 19, TypeScript, Vite
+*   **Styling**: Чистый CSS с использованием кастомных CSS-переменных для переключения тем
+*   **ZIP-парсинг**: JSZip
+*   **Локальное хранилище**: IndexedDB + LocalForage
+*   **Нативный контейнер**: Capacitor (для интеграции с Android API и сборки APK)
+*   **Иконки**: Lucide React
+
+---
+
+## 📦 Как запустить проект локально
+
+1. Установите зависимости:
+   ```bash
+   npm install
+   ```
+
+2. Запустите локальный сервер разработки:
+   ```bash
+   npm run dev
+   ```
+   *Приложение запустится на `http://localhost:5173`. Вы можете открыть этот адрес с мобильного браузера в вашей Wi-Fi сети для установки PWA-версии на главный экран.*
+
+3. Соберите веб-проект:
+   ```bash
+   npm run build
+   ```
+
+---
+
+## 🤖 Интеграция с Android и сборка APK
+
+Нативный проект расположен в папке `android/` и полностью настроен для сборки в Android Studio.
+
+### Шаг 1: Синхронизация кода
+Каждый раз при изменении исходного веб-кода в `src/` выполняйте сборку и копирование ассетов в проект Android:
+```bash
+npm run android:sync
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### Шаг 2: Открытие в Android Studio
+Выполните команду для автоматического открытия Android Studio:
+```bash
+npm run android:open
+```
+*Или откройте Android Studio вручную и выберите директорию `android/`.*
+
+### Шаг 3: Сборка APK
+1. Дождитесь завершения Gradle-синхронизации в Android Studio.
+2. Подключите телефон по USB с включенным режимом отладки и нажмите кнопку **Run** для прямой установки.
+3. Либо выберите в верхнем меню: **Build** -> **Build Bundle(s) / APK(s)** -> **Build APK(s)** для генерации готового установочного файла `app-debug.apk`.
