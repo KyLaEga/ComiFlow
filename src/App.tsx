@@ -62,6 +62,67 @@ function App() {
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
 
+  // Open file from native path (Capacitor local file URL)
+  const handleOpenFileFromNativePath = async (nativePath: string) => {
+    setIsImporting(true);
+    setImportProgress('Копирование файла...');
+    try {
+      const capUrl = (window as any).Capacitor 
+        ? (window as any).Capacitor.convertFileSrc(nativePath)
+        : `http://localhost/_capacitor_file_${nativePath}`;
+        
+      const res = await fetch(capUrl);
+      if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
+      const blob = await res.blob();
+      
+      const baseName = nativePath.split('/').pop() || 'imported_file';
+      const cleanName = baseName.replace(/^open_\d+_/, '');
+      
+      const file = new File([blob], cleanName, { type: blob.type });
+      
+      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+      const lowerName = cleanName.toLowerCase();
+      const isPdf = lowerName.endsWith('.pdf');
+      
+      if (isPdf) {
+        setImportProgress('Чтение PDF...');
+        const parsed = await parsePDF(file, cleanName);
+        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
+        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
+      } else {
+        setImportProgress('Распаковка архива...');
+        const parsed = await parseCBZ(file, cleanName);
+        await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
+      }
+      
+      const list = await getAllComics();
+      setComics(list);
+      
+      setActiveComicFile(file);
+      setActiveComicId(id);
+      
+    } catch (err) {
+      console.error('Failed to open file from native path:', err);
+      alert(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+    } finally {
+      setIsImporting(false);
+      setImportProgress('');
+    }
+  };
+
+  // Open file from Android content:// URI
+  const handleOpenFileFromUri = async (uri: string) => {
+    const bridge = (window as any).ComiFlowBridge;
+    if (bridge && typeof bridge.copyContentUriToCache === 'function') {
+      const nativePath = bridge.copyContentUriToCache(uri);
+      if (nativePath) {
+        await handleOpenFileFromNativePath(nativePath);
+      } else {
+        alert('Не удалось получить доступ к файлу на устройстве.');
+      }
+    }
+  };
+
   // Initialize DB and Load Settings, Comics & Shelves
   useEffect(() => {
     initDb();
@@ -102,7 +163,33 @@ function App() {
 
     loadComics();
     loadShelves();
+
+    // Check for file association intent opening on launch
+    setTimeout(() => {
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.getPendingFileUri === 'function') {
+        const uri = bridge.getPendingFileUri();
+        if (uri) {
+          handleOpenFileFromUri(uri);
+        }
+      }
+    }, 1000);
   }, []);
+
+  // Listen to new file open intents while app is running
+  useEffect(() => {
+    const handleNativeFile = (e: Event) => {
+      const customEvent = e as CustomEvent<{ uri: string }>;
+      if (customEvent.detail && customEvent.detail.uri) {
+        handleOpenFileFromUri(customEvent.detail.uri);
+      }
+    };
+    
+    window.addEventListener('nativeOpenFile', handleNativeFile);
+    return () => {
+      window.removeEventListener('nativeOpenFile', handleNativeFile);
+    };
+  }, [comics]);
 
   // Apply Theme Attribute to HTML Element
   useEffect(() => {
