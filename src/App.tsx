@@ -288,6 +288,48 @@ function App() {
     setComics(list);
   };
 
+  // Bulk delete comics
+  const handleBulkDeleteComics = async (ids: string[]) => {
+    if (window.confirm(`Удалить выбранные файлы (${ids.length})?`)) {
+      setIsImporting(true);
+      setImportProgress('Удаление файлов...');
+      try {
+        for (const id of ids) {
+          const comic = comics.find((c) => c.id === id);
+          if (comic?.coverUrl) URL.revokeObjectURL(comic.coverUrl);
+          await deleteComic(id);
+        }
+        const list = await getAllComics();
+        setComics(list);
+      } catch (err) {
+        console.error('Failed bulk delete:', err);
+        alert('Ошибка при пакетном удалении.');
+      } finally {
+        setIsImporting(false);
+        setImportProgress('');
+      }
+    }
+  };
+
+  // Bulk assign comics to shelf
+  const handleBulkAssignComicsToShelf = async (ids: string[], shelfId: string | null) => {
+    setIsImporting(true);
+    setImportProgress('Перемещение файлов...');
+    try {
+      for (const id of ids) {
+        await assignComicToShelf(id, shelfId);
+      }
+      const list = await getAllComics();
+      setComics(list);
+    } catch (err) {
+      console.error('Failed bulk shelf assignment:', err);
+      alert('Ошибка при перемещении файлов.');
+    } finally {
+      setIsImporting(false);
+      setImportProgress('');
+    }
+  };
+
   // Active comic metadata helper
   const activeComic = comics.find((c) => c.id === activeComicId);
   const shelfComics = activeComic 
@@ -330,6 +372,8 @@ function App() {
           onAddShelf={handleAddShelf}
           onDeleteShelf={handleDeleteShelf}
           onAssignComicToShelf={handleAssignComicToShelf}
+          onBulkDeleteComics={handleBulkDeleteComics}
+          onBulkAssignComicsToShelf={handleBulkAssignComicsToShelf}
         />
       )}
 

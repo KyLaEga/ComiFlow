@@ -58,8 +58,6 @@ export const Reader: React.FC<ReaderProps> = ({
   const touchStartY = useRef(0);
   const isSwipeDragging = useRef(false);
 
-  // Webtoon scroll images URLs
-  const [webtoonPageUrls, setWebtoonPageUrls] = useState<string[]>([]);
   const webtoonContainerRef = useRef<HTMLDivElement>(null);
 
   // Reset zoom & pan
@@ -147,39 +145,13 @@ export const Reader: React.FC<ReaderProps> = ({
     }
   }, [currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
 
-  // Load all pages for Webtoon mode
-  const loadAllWebtoonPages = useCallback(async () => {
-    setIsLoadingPage(true);
-    try {
-      // Revoke any previous urls
-      webtoonPageUrls.forEach(url => URL.revokeObjectURL(url));
-      
-      const urls: string[] = [];
-      // To prevent lagging, load them sequentially
-      for (let i = 0; i < comic.pages.length; i++) {
-        const blob = await fetchPageBlob(i);
-        urls.push(URL.createObjectURL(blob));
-      }
-      setWebtoonPageUrls(urls);
-
-      // Scroll to current page after loading
-      setTimeout(() => {
-        const pageEl = document.getElementById(`webtoon-page-${currentPage}`);
-        if (pageEl) {
-          pageEl.scrollIntoView({ block: 'start' });
-        }
-      }, 300);
-    } catch (err) {
-      console.error('Error loading webtoon pages:', err);
-    } finally {
-      setIsLoadingPage(false);
-    }
-  }, [comic.pages.length, fetchPageBlob, webtoonPageUrls, currentPage]);
-
   // Init mode transitions
   useEffect(() => {
     if (settings.mode === 'webtoon') {
-      loadAllWebtoonPages();
+      setTimeout(() => {
+        const pageEl = document.getElementById(`webtoon-page-${currentPage}`);
+        pageEl?.scrollIntoView({ block: 'start' });
+      }, 500);
     } else {
       loadPage(currentPage);
     }
@@ -188,7 +160,6 @@ export const Reader: React.FC<ReaderProps> = ({
       // Cleanup URLs
       if (pageUrl) URL.revokeObjectURL(pageUrl);
       if (nextPageUrl) URL.revokeObjectURL(nextPageUrl);
-      webtoonPageUrls.forEach(url => URL.revokeObjectURL(url));
       clearCBZCache();
       clearPDFCache();
     };
@@ -300,30 +271,11 @@ export const Reader: React.FC<ReaderProps> = ({
     return () => window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
   }, [settings.volumeKeysEnabled, settings.direction, turnPage]);
 
-  // Webtoon scroll listener to track page progress
-  const handleWebtoonScroll = () => {
-    if (settings.mode !== 'webtoon' || !webtoonContainerRef.current) return;
-    const container = webtoonContainerRef.current;
-    const scrollPos = container.scrollTop + container.clientHeight / 2;
-    
-    // Find which page is in the middle of viewport
-    let currentActiveIdx = 0;
-    for (let i = 0; i < comic.totalPages; i++) {
-      const pageEl = document.getElementById(`webtoon-page-${i}`);
-      if (pageEl) {
-        const { offsetTop, clientHeight } = pageEl;
-        if (scrollPos >= offsetTop && scrollPos <= offsetTop + clientHeight) {
-          currentActiveIdx = i;
-          break;
-        }
-      }
-    }
-    
-    if (currentActiveIdx !== currentPage) {
-      setCurrentPage(currentActiveIdx);
-      updateComicProgress(comic.id, currentActiveIdx);
-    }
-  };
+  // Webtoon scroll dynamic page visibility callback
+  const handlePageVisibleInWebtoon = useCallback((index: number) => {
+    setCurrentPage(index);
+    updateComicProgress(comic.id, index);
+  }, [comic.id]);
 
   // Double tap zoom handler
   const handleDoubleTap = (clientX: number, clientY: number) => {
@@ -466,7 +418,6 @@ export const Reader: React.FC<ReaderProps> = ({
       <div 
         className={`reader-viewport ${settings.mode === 'webtoon' ? 'webtoon-mode' : ''}`}
         ref={settings.mode === 'webtoon' ? webtoonContainerRef : null}
-        onScroll={settings.mode === 'webtoon' ? handleWebtoonScroll : undefined}
       >
         {/* Hotspots for Paged turning */}
         {settings.mode === 'paged' && zoomScale === 1 && (
@@ -496,15 +447,13 @@ export const Reader: React.FC<ReaderProps> = ({
         {/* WEBTOON RENDERING */}
         {settings.mode === 'webtoon' && (
           <div className="webtoon-scroll-container" onClick={toggleHud}>
-            {webtoonPageUrls.map((url, idx) => (
-              <img
-                key={idx}
-                id={`webtoon-page-${idx}`}
-                src={url}
-                alt={`Страница ${idx + 1}`}
-                className="webtoon-page"
-                style={filterStyles}
-                loading="lazy"
+            {comic.pages.map((_, idx) => (
+              <WebtoonPageWrapper
+                key={`${comic.id}-page-${idx}`}
+                index={idx}
+                fetchPageBlob={fetchPageBlob}
+                onVisible={handlePageVisibleInWebtoon}
+                filterStyles={filterStyles}
               />
             ))}
           </div>
@@ -673,6 +622,109 @@ export const Reader: React.FC<ReaderProps> = ({
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+};
+
+// =======================================================
+// Webtoon Page Lazy/Virtual Loader Wrapper Component
+// =======================================================
+interface WebtoonPageWrapperProps {
+  index: number;
+  fetchPageBlob: (index: number) => Promise<Blob>;
+  onVisible: (index: number) => void;
+  filterStyles: React.CSSProperties;
+}
+
+const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = ({
+  index,
+  fetchPageBlob,
+  onVisible,
+  filterStyles
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      async (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting) {
+          onVisible(index);
+          
+          // Lazy load page blob
+          if (!imgUrl) {
+            try {
+              const blob = await fetchPageBlob(index);
+              const url = URL.createObjectURL(blob);
+              setImgUrl(url);
+            } catch (err) {
+              console.error(`Failed to load Webtoon page ${index}:`, err);
+            }
+          }
+        } else {
+          // Offload image if scrolled far away to protect RAM memory
+          if (imgUrl) {
+            URL.revokeObjectURL(imgUrl);
+            setImgUrl(null);
+          }
+        }
+      },
+      {
+        rootMargin: '1000px 0px', // Load images 1000px before entering viewport
+        threshold: 0.01
+      }
+    );
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+
+    return () => {
+      observer.disconnect();
+      if (imgUrl) {
+        URL.revokeObjectURL(imgUrl);
+      }
+    };
+  }, [index, fetchPageBlob, imgUrl]);
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      setAspectRatio(img.naturalWidth / img.naturalHeight);
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      id={`webtoon-page-${index}`}
+      style={{
+        width: '100%',
+        aspectRatio: aspectRatio ? `${aspectRatio}` : '2/3',
+        backgroundColor: '#000000',
+        minHeight: '200px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {imgUrl ? (
+        <img
+          src={imgUrl}
+          alt={`Страница ${index + 1}`}
+          onLoad={handleImageLoad}
+          style={{
+            width: '100%',
+            height: 'auto',
+            display: 'block',
+            ...filterStyles,
+          }}
+        />
+      ) : (
+        <div className="spinner" style={{ width: '30px', height: '30px', borderTopColor: 'var(--accent)' }} />
       )}
     </div>
   );

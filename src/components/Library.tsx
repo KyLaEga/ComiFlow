@@ -14,6 +14,8 @@ interface LibraryProps {
   onAddShelf: (name: string) => void;
   onDeleteShelf: (id: string) => void;
   onAssignComicToShelf: (comicId: string, shelfId: string | null) => void;
+  onBulkDeleteComics: (ids: string[]) => void;
+  onBulkAssignComicsToShelf: (ids: string[], shelfId: string | null) => void;
 }
 
 export const Library: React.FC<LibraryProps> = ({
@@ -27,11 +29,15 @@ export const Library: React.FC<LibraryProps> = ({
   onAddShelf,
   onDeleteShelf,
   onAssignComicToShelf,
+  onBulkDeleteComics,
+  onBulkAssignComicsToShelf,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent'>('added');
   const [isDragActive, setIsDragActive] = useState(false);
   const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -63,6 +69,22 @@ export const Library: React.FC<LibraryProps> = ({
 
   const triggerFileSelect = () => {
     fileInputRef.current?.click();
+  };
+
+  const handleCardClick = (comicId: string) => {
+    if (isSelectMode) {
+      setSelectedComicIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(comicId)) {
+          next.delete(comicId);
+        } else {
+          next.add(comicId);
+        }
+        return next;
+      });
+    } else {
+      onSelectComic(comicId);
+    }
   };
 
   // Format bytes to readable size
@@ -188,7 +210,21 @@ export const Library: React.FC<LibraryProps> = ({
             />
           </div>
 
-          <div className="filter-options">
+          <div className="filter-options" style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <button
+              className="shelf-tab-btn"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              onClick={() => {
+                setIsSelectMode((prev) => {
+                  if (prev) {
+                    setSelectedComicIds(new Set());
+                  }
+                  return !prev;
+                });
+              }}
+            >
+              {isSelectMode ? 'Отмена' : 'Выбрать'}
+            </button>
             <select
               className="select-input"
               value={sortBy}
@@ -202,6 +238,47 @@ export const Library: React.FC<LibraryProps> = ({
         </div>
       )}
 
+      {/* Bulk Operations Action Bar */}
+      {isSelectMode && selectedComicIds.size > 0 && (
+        <div className="library-controls" style={{ backgroundColor: 'var(--accent-light)', padding: '12px 16px', borderRadius: '16px', border: '1px solid var(--accent-border)', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--accent)' }}>
+            Выбрано файлов: {selectedComicIds.size}
+          </span>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <select
+              className="card-shelf-select"
+              style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
+              defaultValue=""
+              onChange={(e) => {
+                const val = e.target.value;
+                onBulkAssignComicsToShelf(Array.from(selectedComicIds), val === '' ? null : val);
+                setSelectedComicIds(new Set());
+                setIsSelectMode(false);
+              }}
+            >
+              <option value="" disabled>Переместить на полку...</option>
+              <option value="">Без полки (Главная)</option>
+              {shelves.map((shelf) => (
+                <option key={shelf.id} value={shelf.id}>
+                  Полка: {shelf.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn btn-danger"
+              style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px' }}
+              onClick={() => {
+                onBulkDeleteComics(Array.from(selectedComicIds));
+                setSelectedComicIds(new Set());
+                setIsSelectMode(false);
+              }}
+            >
+              <Trash2 size={14} /> Удалить ({selectedComicIds.size})
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Comics Grid */}
       {sortedComics.length > 0 ? (
         <div className="comic-grid">
@@ -209,7 +286,7 @@ export const Library: React.FC<LibraryProps> = ({
             const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
             
             return (
-              <div className="comic-card" key={comic.id}>
+              <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} key={comic.id} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
                 {/* Actions overlay */}
                 <div className="card-actions-overlay">
                   <button
@@ -227,7 +304,31 @@ export const Library: React.FC<LibraryProps> = ({
                 </div>
 
                 {/* Cover Image Wrapper */}
-                <div className="card-cover-wrapper" onClick={() => onSelectComic(comic.id)}>
+                <div className="card-cover-wrapper" onClick={() => handleCardClick(comic.id)} style={{ position: 'relative' }}>
+                  {isSelectMode && (
+                    <div 
+                      style={{
+                        position: 'absolute',
+                        top: '10px',
+                        left: '10px',
+                        width: '22px',
+                        height: '22px',
+                        borderRadius: '6px',
+                        border: '2px solid #ffffff',
+                        backgroundColor: selectedComicIds.has(comic.id) ? 'var(--accent)' : 'rgba(0,0,0,0.5)',
+                        zIndex: 5,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#ffffff',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                      }}
+                    >
+                      {selectedComicIds.has(comic.id) && '✓'}
+                    </div>
+                  )}
                   {comic.coverUrl ? (
                     <img
                       src={comic.coverUrl}
@@ -259,7 +360,7 @@ export const Library: React.FC<LibraryProps> = ({
                 <div className="card-details">
                   <h4 
                     className="card-title" 
-                    onClick={() => onSelectComic(comic.id)}
+                    onClick={() => handleCardClick(comic.id)}
                     title={comic.title}
                   >
                     {comic.title}
