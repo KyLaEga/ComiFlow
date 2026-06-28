@@ -1,0 +1,18 @@
+{
+  "name": "ComiFlow Comic Reader",
+  "short_name": "ComiFlow",
+  "description": "Премиальный веб-ридер комиксов и манги в формате CBZ и ZIP",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121316",
+  "theme_color": "#aa3bff",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
