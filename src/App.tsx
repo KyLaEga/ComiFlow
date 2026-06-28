@@ -35,6 +35,17 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   contrast: 100,
 };
 
+const updateNativeVolumeKeysState = (enabled: boolean) => {
+  const bridge = (window as any).ComiFlowBridge;
+  if (bridge && typeof bridge.setVolumeKeysEnabled === 'function') {
+    try {
+      bridge.setVolumeKeysEnabled(enabled);
+    } catch (e) {
+      console.error('Failed to communicate volume key setting to native bridge:', e);
+    }
+  }
+};
+
 function App() {
   const [comics, setComics] = useState<ComicMetadata[]>([]);
   const [activeComicId, setActiveComicId] = useState<string | null>(null);
@@ -61,6 +72,9 @@ function App() {
       try {
         const parsed = JSON.parse(saved);
         setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+        if (parsed.volumeKeysEnabled !== undefined) {
+          updateNativeVolumeKeysState(parsed.volumeKeysEnabled);
+        }
       } catch (e) {
         console.warn('Failed to parse saved settings', e);
       }
@@ -100,6 +114,9 @@ function App() {
     setSettings((prev) => {
       const updated = { ...prev, ...newSettings };
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
+      if (newSettings.volumeKeysEnabled !== undefined) {
+        updateNativeVolumeKeysState(newSettings.volumeKeysEnabled);
+      }
       return updated;
     });
   }, []);
