@@ -63,6 +63,8 @@ function App() {
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
+  
+  const libraryScrollYRef = useRef<number>(0);
 
   // Keep a ref to activeComicId for the backButton listener
   const activeComicIdRef = useRef<string | null>(null);
@@ -78,6 +80,10 @@ function App() {
         // If comic is open, close it
         setActiveComicId(null);
         setActiveComicFile(null);
+        
+        requestAnimationFrame(() => {
+          window.scrollTo(0, libraryScrollYRef.current);
+        });
       } else {
         // If library is open, exit app
         CapacitorApp.exitApp();
@@ -174,7 +180,23 @@ function App() {
       }
     } catch (err) {
       console.error(`Error importing file ${originalName}:`, err);
-      alert(`Не удалось загрузить "${originalName}": ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+      
+      // Provide a better error message for "corrupted zip" which often means a RAR file disguised as CBZ
+      const errMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
+      const isCorruptedZip = errMsg.toLowerCase().includes("can't find end of central directory");
+      
+      const userFriendlyMsg = isCorruptedZip 
+        ? `Архив повреждён или имеет неподдерживаемый формат (например, это .cbr/RAR файл, переименованный в .cbz). Поддерживаются только настоящие ZIP-архивы.`
+        : errMsg;
+        
+      if (openAfterImport) {
+        alert(`Не удалось загрузить "${originalName}": ${userFriendlyMsg}`);
+      } else {
+        // Just show a brief toast-like progress or ignore silently to not block bulk import
+        setImportProgress(`Ошибка: ${originalName} - ${userFriendlyMsg}`);
+        // We add a tiny delay so the user can see there was an error in progress, but we don't block
+        await new Promise(r => setTimeout(r, 2000));
+      }
     }
   };
 
@@ -328,6 +350,9 @@ function App() {
       if (!file) {
         throw new Error('Файл комикса не найден в локальной базе данных.');
       }
+      
+      libraryScrollYRef.current = window.scrollY;
+      
       setActiveComicFile(file);
       setActiveComicId(id);
     } catch (err) {
@@ -343,6 +368,10 @@ function App() {
   const handleCloseReader = useCallback(() => {
     setActiveComicId(null);
     setActiveComicFile(null);
+    
+    requestAnimationFrame(() => {
+      window.scrollTo(0, libraryScrollYRef.current);
+    });
     
     // Refresh progress state in library listing
     getAllComics().then((list) => {
