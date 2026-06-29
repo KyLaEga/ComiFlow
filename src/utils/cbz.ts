@@ -29,50 +29,88 @@ export const isImageFile = (filename: string): boolean => {
   return IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 };
 
-export interface ParsedCBZ {
+export interface ParsedComic {
+  type: 'comic';
   title: string;
   pages: string[];
   coverBlob: Blob;
 }
 
+export interface ParsedCollection {
+  type: 'collection';
+  archives: { name: string; blob: Blob }[];
+}
+
+export type ParseResult = ParsedComic | ParsedCollection;
+
 /**
  * Parses a CBZ file Blob to extract its title, page list, and cover image
+ * Or returns a collection of nested archives if no images are found
  */
-export async function parseCBZ(file: File | Blob, originalName: string): Promise<ParsedCBZ> {
+export async function parseCBZ(file: File | Blob, originalName: string): Promise<ParseResult> {
   const zip = await JSZip.loadAsync(file);
   
-  // Collect all image files
+  // Collect all image files and nested archives
   const filePaths: string[] = [];
+  const archivePaths: string[] = [];
+  
   zip.forEach((relativePath, fileEntry) => {
-    if (!fileEntry.dir && isImageFile(relativePath)) {
-      filePaths.push(relativePath);
+    if (!fileEntry.dir) {
+      if (isImageFile(relativePath)) {
+        filePaths.push(relativePath);
+      } else {
+        const lower = relativePath.toLowerCase();
+        if (lower.endsWith('.cbz') || lower.endsWith('.zip')) {
+          archivePaths.push(relativePath);
+        }
+      }
     }
   });
 
-  if (filePaths.length === 0) {
-    throw new Error('В CBZ файле не найдено изображений.');
+  // If there are images, treat this as a comic
+  if (filePaths.length > 0) {
+    // Sort pages naturally
+    filePaths.sort(naturalSort);
+
+    // Extract cover page (first page)
+    const coverPath = filePaths[0];
+    const coverZipFile = zip.file(coverPath);
+    if (!coverZipFile) {
+      throw new Error('Не удалось прочитать обложку комикса.');
+    }
+
+    const coverBlob = await coverZipFile.async('blob');
+    
+    // Remove extension for title
+    const title = originalName.replace(/\.[^/.]+$/, "");
+
+    return {
+      type: 'comic',
+      title,
+      pages: filePaths,
+      coverBlob,
+    };
   }
-
-  // Sort pages naturally
-  filePaths.sort(naturalSort);
-
-  // Extract cover page (first page)
-  const coverPath = filePaths[0];
-  const coverZipFile = zip.file(coverPath);
-  if (!coverZipFile) {
-    throw new Error('Не удалось прочитать обложку комикса.');
-  }
-
-  const coverBlob = await coverZipFile.async('blob');
   
-  // Remove extension for title
-  const title = originalName.replace(/\.[^/.]+$/, "");
+  // If no images but nested archives exist, treat as collection
+  if (archivePaths.length > 0) {
+    const archives = [];
+    for (const path of archivePaths) {
+      const entry = zip.file(path);
+      if (entry) {
+        const blob = await entry.async('blob');
+        const name = path.split('/').pop() || path;
+        archives.push({ name, blob });
+      }
+    }
+    
+    return {
+      type: 'collection',
+      archives,
+    };
+  }
 
-  return {
-    title,
-    pages: filePaths,
-    coverBlob,
-  };
+  throw new Error('В файле не найдено изображений или вложенных комиксов.');
 }
 
 // In-memory cache for the currently reading zip file to optimize performance

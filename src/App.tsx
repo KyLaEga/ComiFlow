@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
 import { Library } from './components/Library';
 import { Reader } from './components/Reader';
 import { Settings } from './components/Settings';
@@ -61,6 +62,36 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
+  const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
+
+  // Keep a ref to activeComicId for the backButton listener
+  const activeComicIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeComicIdRef.current = activeComicId;
+  }, [activeComicId]);
+
+  // Handle hardware back button
+  useEffect(() => {
+    let backSub: any = null;
+    CapacitorApp.addListener('backButton', () => {
+      if (activeComicIdRef.current) {
+        // If comic is open, close it
+        setActiveComicId(null);
+        setActiveComicFile(null);
+      } else {
+        // If library is open, exit app
+        CapacitorApp.exitApp();
+      }
+    }).then(sub => {
+      backSub = sub;
+    });
+
+    return () => {
+      if (backSub) {
+        backSub.remove();
+      }
+    };
+  }, []);
 
   // Open file from native path (Capacitor local file URL)
   const handleOpenFileFromNativePath = async (nativePath: string) => {
@@ -80,26 +111,13 @@ function App() {
       
       const file = new File([blob], cleanName, { type: blob.type });
       
-      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
       const lowerName = cleanName.toLowerCase();
       const isPdf = lowerName.endsWith('.pdf');
       
-      if (isPdf) {
-        setImportProgress('Чтение PDF...');
-        const parsed = await parsePDF(file, cleanName);
-        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
-        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
-      } else {
-        setImportProgress('Распаковка архива...');
-        const parsed = await parseCBZ(file, cleanName);
-        await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
-      }
+      await processSingleFileForImport(file, cleanName, isPdf, null, true);
       
       const list = await getAllComics();
       setComics(list);
-      
-      setActiveComicFile(file);
-      setActiveComicId(id);
       
     } catch (err) {
       console.error('Failed to open file from native path:', err);
@@ -107,6 +125,56 @@ function App() {
     } finally {
       setIsImporting(false);
       setImportProgress('');
+    }
+  };
+
+  // Helper to process a single file (which could be a collection)
+  const processSingleFileForImport = async (
+    file: File | Blob, 
+    originalName: string, 
+    isPdf: boolean, 
+    shelfId: string | null,
+    openAfterImport: boolean = false
+  ) => {
+    try {
+      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+      
+      if (isPdf) {
+        setImportProgress(`Обработка PDF "${originalName}"...`);
+        const parsed = await parsePDF(file as File, originalName);
+        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
+        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
+        if (shelfId) await assignComicToShelf(id, shelfId);
+        
+        if (openAfterImport) {
+          setActiveComicFile(file);
+          setActiveComicId(id);
+        }
+      } else {
+        setImportProgress(`Распаковка "${originalName}"...`);
+        const parsed = await parseCBZ(file, originalName);
+
+        if (parsed.type === 'collection') {
+          setImportProgress(`Найдено ${parsed.archives.length} архивов внутри "${originalName}"...`);
+          // Recursively process nested archives
+          for (const archive of parsed.archives) {
+            const nestedIsPdf = archive.name.toLowerCase().endsWith('.pdf');
+            await processSingleFileForImport(archive.blob, archive.name, nestedIsPdf, shelfId, false);
+          }
+        } else {
+          setImportProgress(`Сохранение "${originalName}"...`);
+          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
+          if (shelfId) await assignComicToShelf(id, shelfId);
+          
+          if (openAfterImport) {
+            setActiveComicFile(file);
+            setActiveComicId(id);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Error importing file ${originalName}:`, err);
+      alert(`Не удалось загрузить "${originalName}": ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
     }
   };
 
@@ -231,33 +299,7 @@ function App() {
         continue;
       }
 
-      try {
-        const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-        
-        if (isPdf) {
-          setImportProgress(`Файл ${i + 1} из ${files.length}: Чтение PDF "${file.name}"...`);
-          const parsed = await parsePDF(file, file.name);
-
-          setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
-          const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
-          await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
-          if (shelfId) {
-            await assignComicToShelf(id, shelfId);
-          }
-        } else {
-          setImportProgress(`Файл ${i + 1} из ${files.length}: Распаковка "${file.name}"...`);
-          const parsed = await parseCBZ(file, file.name);
-
-          setImportProgress(`Файл ${i + 1} из ${files.length}: Сохранение обложки и страниц...`);
-          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
-          if (shelfId) {
-            await assignComicToShelf(id, shelfId);
-          }
-        }
-      } catch (err) {
-        console.error('Error importing file:', err);
-        alert(`Не удалось загрузить "${file.name}": ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
-      }
+      await processSingleFileForImport(file, file.name, isPdf, shelfId, false);
     }
 
     // Refresh Library List
@@ -461,6 +503,8 @@ function App() {
           onAssignComicToShelf={handleAssignComicToShelf}
           onBulkDeleteComics={handleBulkDeleteComics}
           onBulkAssignComicsToShelf={handleBulkAssignComicsToShelf}
+          activeShelfId={activeShelfId}
+          setActiveShelfId={setActiveShelfId}
         />
       )}
 

@@ -16,6 +16,8 @@ interface LibraryProps {
   onAssignComicToShelf: (comicId: string, shelfId: string | null) => void;
   onBulkDeleteComics: (ids: string[]) => void;
   onBulkAssignComicsToShelf: (ids: string[], shelfId: string | null) => void;
+  activeShelfId: string | null;
+  setActiveShelfId: (id: string | null) => void;
 }
 
 export const Library: React.FC<LibraryProps> = ({
@@ -31,11 +33,12 @@ export const Library: React.FC<LibraryProps> = ({
   onAssignComicToShelf,
   onBulkDeleteComics,
   onBulkAssignComicsToShelf,
+  activeShelfId,
+  setActiveShelfId,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent'>('added');
   const [isDragActive, setIsDragActive] = useState(false);
-  const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
