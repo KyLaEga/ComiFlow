@@ -60,7 +60,12 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
         filePaths.push(relativePath);
       } else {
         const lower = relativePath.toLowerCase();
-        if (lower.endsWith('.cbz') || lower.endsWith('.zip')) {
+        const filename = relativePath.split('/').pop() || relativePath;
+        if (
+          (lower.endsWith('.cbz') || lower.endsWith('.zip')) && 
+          !filename.startsWith('.') && 
+          !filename.startsWith('._')
+        ) {
           archivePaths.push(relativePath);
         }
       }

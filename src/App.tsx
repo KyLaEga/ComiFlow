@@ -489,7 +489,7 @@ function App() {
       )}
 
       {/* Library View */}
-      {!activeComicId && (
+      <div style={{ display: activeComicId ? 'none' : 'block', height: '100%' }}>
         <Library
           comics={comics}
           onSelectComic={handleSelectComic}
@@ -506,7 +506,7 @@ function App() {
           activeShelfId={activeShelfId}
           setActiveShelfId={setActiveShelfId}
         />
-      )}
+      </div>
 
       {/* Reader View */}
       {activeComicId && activeComic && activeComicFile && (
