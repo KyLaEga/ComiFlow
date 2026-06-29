@@ -129,6 +129,10 @@ function App() {
       console.error('Failed to open file from native path:', err);
       alert(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
     } finally {
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.clearImportCache === 'function') {
+        bridge.clearImportCache();
+      }
       setIsImporting(false);
       setImportProgress('');
     }
@@ -216,6 +220,12 @@ function App() {
   // Initialize DB and Load Settings, Comics & Shelves
   useEffect(() => {
     initDb();
+    
+    // Clear any leftover import caches from previous sessions
+    const bridge = (window as any).ComiFlowBridge;
+    if (bridge && typeof bridge.clearImportCache === 'function') {
+      bridge.clearImportCache();
+    }
     
     // Load settings from localStorage
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -336,6 +346,10 @@ function App() {
     } catch (err) {
       console.error('Failed to refresh library:', err);
     } finally {
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.clearImportCache === 'function') {
+        bridge.clearImportCache();
+      }
       setIsImporting(false);
       setImportProgress('');
     }

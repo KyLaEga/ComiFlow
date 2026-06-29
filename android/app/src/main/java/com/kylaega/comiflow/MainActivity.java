@@ -75,6 +75,39 @@ public class MainActivity extends BridgeActivity {
                     return null;
                 }
             }
+
+            @JavascriptInterface
+            public void clearImportCache() {
+                try {
+                    // Delete all "open_*" files in cache dir
+                    java.io.File cacheDir = getCacheDir();
+                    if (cacheDir != null && cacheDir.isDirectory()) {
+                        java.io.File[] files = cacheDir.listFiles();
+                        if (files != null) {
+                            for (java.io.File file : files) {
+                                if (file.getName().startsWith("open_") && file.isFile()) {
+                                    file.delete();
+                                }
+                            }
+                        }
+                        
+                        // Also delete Capacitor file_picker cache
+                        java.io.File filePickerDir = new java.io.File(cacheDir, "file_picker");
+                        if (filePickerDir.exists() && filePickerDir.isDirectory()) {
+                            java.io.File[] pickerFiles = filePickerDir.listFiles();
+                            if (pickerFiles != null) {
+                                for (java.io.File file : pickerFiles) {
+                                    if (file.isFile()) {
+                                        file.delete();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
         }, "ComiFlowBridge");
     }
 
