@@ -19,6 +19,8 @@ interface SettingsProps {
   settings: ReaderSettings;
   onUpdateSettings: (newSettings: Partial<ReaderSettings>) => void;
   onClearLibrary: () => void;
+  onChangeLibraryFolder: () => void;
+  libraryFolderUri: string | null;
 }
 
 export const Settings: React.FC<SettingsProps> = ({
@@ -27,6 +29,8 @@ export const Settings: React.FC<SettingsProps> = ({
   settings,
   onUpdateSettings,
   onClearLibrary,
+  onChangeLibraryFolder,
+  libraryFolderUri,
 }) => {
   const [storageUsage, setStorageUsage] = useState<string>('');
 
@@ -61,6 +65,58 @@ export const Settings: React.FC<SettingsProps> = ({
           <button className="btn-icon" onClick={onClose} aria-label="Закрыть">
             <X size={20} />
           </button>
+        </div>
+
+        {/* Хранилище */}
+        <div className="mb-8">
+          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
+            Хранилище
+          </h3>
+          <div className="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden border border-gray-100 dark:border-gray-700">
+            {libraryFolderUri && (
+              <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-850">
+                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Выбранная папка библиотеки:</div>
+                <div className="text-sm font-mono text-gray-800 dark:text-gray-200 truncate" title={decodeURIComponent(libraryFolderUri)}>
+                  {decodeURIComponent(libraryFolderUri).split('/').pop()}
+                </div>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                onChangeLibraryFolder();
+                onClose();
+              }}
+              className="w-full text-left p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors flex items-center justify-between border-b border-gray-100 dark:border-gray-700"
+            >
+              <div>
+                <div className="font-medium text-indigo-600 dark:text-indigo-400">Сменить папку библиотеки</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Выбрать другую папку для ваших комиксов
+                </div>
+              </div>
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm('Вы уверены, что хотите удалить базу данных и отвязать папку? Файлы на устройстве останутся.')) {
+                  onClearLibrary();
+                  onClose();
+                }
+              }}
+              className="w-full text-left p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors flex items-center justify-between"
+            >
+              <div>
+                <div className="font-medium text-red-600 dark:text-red-400">Очистить базу данных</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  Сбросить полки и прогресс чтения
+                </div>
+              </div>
+            </button>
+            {storageUsage && (
+              <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-100 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400 text-center">
+                {storageUsage}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Theme Settings */}
@@ -249,25 +305,6 @@ export const Settings: React.FC<SettingsProps> = ({
           </div>
         </div>
 
-        {/* Danger zone / Clear Library */}
-        <div className="settings-section" style={{ marginTop: 'auto', paddingTop: '20px' }}>
-          {storageUsage && (
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', marginBottom: '12px' }}>
-              {storageUsage}
-            </div>
-          )}
-          <button 
-            className="btn btn-danger" 
-            onClick={() => {
-              if (window.confirm('Вы действительно хотите очистить всю библиотеку комиксов? Это действие нельзя отменить.')) {
-                onClearLibrary();
-                onClose();
-              }
-            }}
-            style={{ width: '100%', border: '1px solid var(--danger)', borderRadius: '12px' }}
-          >
-            Очистить библиотеку
-          </button>
         </div>
       </div>
     </div>

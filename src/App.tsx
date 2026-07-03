@@ -615,17 +615,25 @@ function App() {
 
       {/* Library View */}
       {!activeComicId && !libraryFolderUri && (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-gray-50 dark:bg-gray-900 transition-colors">
-          <BookOpen className="w-24 h-24 mb-6 text-indigo-500 opacity-50" />
-          <h2 className="text-3xl font-bold mb-4 text-gray-800 dark:text-gray-100">Добро пожаловать в ComiFlow</h2>
-          <p className="text-lg text-gray-600 dark:text-gray-300 mb-8 max-w-md">
-            Для начала работы необходимо выбрать или создать папку на устройстве, где будут храниться ваши комиксы. 
-            Если вы добавите или удалите комиксы в этой папке, библиотека обновится автоматически!
-          </p>
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-gray-50 dark:bg-gray-900 transition-colors">
+          <BookOpen className="w-20 h-20 mb-4 text-indigo-500 opacity-50" />
+          <h2 className="text-3xl font-bold mb-4 text-gray-800 dark:text-gray-100">Добро пожаловать!</h2>
+          
+          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-8 text-left">
+            <h3 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-100 border-b pb-2">Инструкция по настройке:</h3>
+            <ol className="list-decimal pl-5 space-y-3 text-gray-600 dark:text-gray-300">
+              <li>Нажмите на синюю кнопку ниже.</li>
+              <li>Выберите любое расположение (например, папку <b>Документы</b>).</li>
+              <li>Создайте новую папку для ваших комиксов (назовите её, например, <b>ComiFlow</b>) или выберите существующую.</li>
+              <li>Нажмите <b>«Использовать эту папку»</b>.</li>
+            </ol>
+          </div>
+          
           <button
             onClick={selectLibraryFolder}
-            className="px-8 py-4 bg-indigo-600 text-white rounded-2xl text-xl font-semibold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all"
+            className="w-full max-w-md py-4 px-6 bg-indigo-600 text-white rounded-xl text-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-3"
           >
+            <BookOpen size={24} />
             Выбрать папку библиотеки
           </button>
         </div>
@@ -671,6 +679,8 @@ function App() {
         settings={settings}
         onUpdateSettings={handleUpdateSettings}
         onClearLibrary={handleClearLibrary}
+        onChangeLibraryFolder={selectLibraryFolder}
+        libraryFolderUri={libraryFolderUri}
       />
 
       {/* Import Shelf Selection Modal */}
