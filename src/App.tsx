@@ -615,14 +615,14 @@ function App() {
 
       {/* Library View */}
       {!activeComicId && !libraryFolderUri && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center bg-gray-50 dark:bg-gray-900 transition-colors">
-          <BookOpen className="w-20 h-20 mb-4 text-indigo-500 opacity-50" />
-          <h2 className="text-3xl font-bold mb-4 text-gray-800 dark:text-gray-100">Добро пожаловать!</h2>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', backgroundColor: 'var(--bg-primary)' }}>
+          <BookOpen style={{ width: '80px', height: '80px', marginBottom: '16px', color: 'var(--accent)', opacity: 0.5 }} />
+          <h2 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--text-primary)' }}>Добро пожаловать!</h2>
           
-          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-8 text-left">
-            <h3 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-100 border-b pb-2">Инструкция по настройке:</h3>
-            <ol className="list-decimal pl-5 space-y-3 text-gray-600 dark:text-gray-300">
-              <li>Нажмите на синюю кнопку ниже.</li>
+          <div style={{ maxWidth: '400px', width: '100%', backgroundColor: 'var(--bg-secondary)', borderRadius: '16px', boxShadow: 'var(--card-shadow)', border: '1px solid var(--border-color)', padding: '24px', marginBottom: '32px', textAlign: 'left' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '12px', color: 'var(--text-primary)', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>Инструкция по настройке:</h3>
+            <ol style={{ paddingLeft: '20px', margin: 0, color: 'var(--text-secondary)', lineHeight: '1.5', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <li>Нажмите на кнопку ниже.</li>
               <li>Выберите любое расположение (например, папку <b>Документы</b>).</li>
               <li>Создайте новую папку для ваших комиксов (назовите её, например, <b>ComiFlow</b>) или выберите существующую.</li>
               <li>Нажмите <b>«Использовать эту папку»</b>.</li>
@@ -631,7 +631,8 @@ function App() {
           
           <button
             onClick={selectLibraryFolder}
-            className="w-full max-w-md py-4 px-6 bg-indigo-600 text-white rounded-xl text-xl font-bold shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-3"
+            className="btn btn-primary"
+            style={{ width: '100%', maxWidth: '400px', padding: '16px', fontSize: '18px', fontWeight: 'bold', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}
           >
             <BookOpen size={24} />
             Выбрать папку библиотеки
