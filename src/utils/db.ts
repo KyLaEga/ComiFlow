@@ -13,27 +13,21 @@ export interface ComicMetadata {
   coverUrl?: string; // Temporarily created Object URL for rendering
   coverBlob: Blob; // Saved Blob of the first page
   format?: 'cbz' | 'pdf'; // File format
+  uri: string; // Native SAF URI pointing to the file
   shelfId?: string | null; // Shelf ID this comic belongs to
 }
 
 // Stores
 let metadataStore: LocalForage;
-let fileStore: LocalForage;
 let shelvesStore: LocalForage;
 
 export const initDb = () => {
-  if (metadataStore && fileStore && shelvesStore) return;
+  if (metadataStore && shelvesStore) return;
 
   metadataStore = localforage.createInstance({
     name: 'ComiFlow',
     storeName: 'comics_metadata',
     description: 'Metadata for comic books and covers',
-  });
-
-  fileStore = localforage.createInstance({
-    name: 'ComiFlow',
-    storeName: 'comics_files',
-    description: 'Raw binary CBZ files',
   });
 
   shelvesStore = localforage.createInstance({
@@ -71,7 +65,7 @@ export async function saveComic(
   size: number,
   pages: string[],
   coverBlob: Blob,
-  fileBlob: Blob,
+  uri: string,
   format: 'cbz' | 'pdf'
 ): Promise<ComicMetadata> {
   const metadata: ComicMetadata = {
@@ -85,24 +79,16 @@ export async function saveComic(
     pages,
     coverBlob,
     format,
+    uri,
     shelfId: null,
   };
 
   // Save metadata
   await metadataStore.setItem(id, metadata);
-  // Save file content
-  await fileStore.setItem(id, fileBlob);
 
   // Add cover URL for runtime display
   metadata.coverUrl = URL.createObjectURL(coverBlob);
   return metadata;
-}
-
-/**
- * Get the CBZ file Blob for a comic
- */
-export async function getComicFile(id: string): Promise<Blob | null> {
-  return await fileStore.getItem<Blob>(id);
 }
 
 /**
@@ -125,7 +111,6 @@ export async function updateComicProgress(
  */
 export async function deleteComic(id: string): Promise<void> {
   await metadataStore.removeItem(id);
-  await fileStore.removeItem(id);
 }
 
 // Shelves API

@@ -6,7 +6,6 @@ import { Settings } from './components/Settings';
 import type { ReaderSettings } from './components/Settings';
 import { 
   getAllComics, 
-  getComicFile, 
   deleteComic, 
   saveComic, 
   initDb,
@@ -48,6 +47,7 @@ const updateNativeVolumeKeysState = (enabled: boolean) => {
 };
 
 function App() {
+  const [libraryFolderUri, setLibraryFolderUri] = useState<string | null>(null);
   const [comics, setComics] = useState<ComicMetadata[]>([]);
   const [activeComicId, setActiveComicId] = useState<string | null>(null);
   const [activeComicFile, setActiveComicFile] = useState<Blob | null>(null);
@@ -99,111 +99,6 @@ function App() {
     };
   }, []);
 
-  // Open file from native path (Capacitor local file URL)
-  const handleOpenFileFromNativePath = async (nativePath: string) => {
-    setIsImporting(true);
-    setImportProgress('Копирование файла...');
-    try {
-      const capUrl = (window as any).Capacitor 
-        ? (window as any).Capacitor.convertFileSrc(nativePath)
-        : `http://localhost/_capacitor_file_${nativePath}`;
-        
-      const res = await fetch(capUrl);
-      if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
-      const blob = await res.blob();
-      
-      const baseName = nativePath.split('/').pop() || 'imported_file';
-      const cleanName = baseName.replace(/^open_\d+_/, '');
-      
-      const file = new File([blob], cleanName, { type: blob.type });
-      
-      const lowerName = cleanName.toLowerCase();
-      const isPdf = lowerName.endsWith('.pdf');
-      
-      await processSingleFileForImport(file, cleanName, isPdf, null, true);
-      
-      const list = await getAllComics();
-      setComics(list);
-      
-    } catch (err) {
-      console.error('Failed to open file from native path:', err);
-      alert(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
-    } finally {
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.clearImportCache === 'function') {
-        bridge.clearImportCache();
-      }
-      setIsImporting(false);
-      setImportProgress('');
-    }
-  };
-
-  // Helper to process a single file (which could be a collection)
-  const processSingleFileForImport = async (
-    file: File | Blob, 
-    originalName: string, 
-    isPdf: boolean, 
-    shelfId: string | null,
-    openAfterImport: boolean = false
-  ) => {
-    try {
-      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-      
-      if (isPdf) {
-        setImportProgress(`Обработка PDF "${originalName}"...`);
-        const parsed = await parsePDF(file as File, originalName);
-        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
-        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, file, 'pdf');
-        if (shelfId) await assignComicToShelf(id, shelfId);
-        
-        if (openAfterImport) {
-          setActiveComicFile(file);
-          setActiveComicId(id);
-        }
-      } else {
-        setImportProgress(`Распаковка "${originalName}"...`);
-        const parsed = await parseCBZ(file, originalName);
-
-        if (parsed.type === 'collection') {
-          setImportProgress(`Найдено ${parsed.archives.length} архивов внутри "${originalName}"...`);
-          // Recursively process nested archives
-          for (const archive of parsed.archives) {
-            const nestedIsPdf = archive.name.toLowerCase().endsWith('.pdf');
-            await processSingleFileForImport(archive.blob, archive.name, nestedIsPdf, shelfId, false);
-          }
-        } else {
-          setImportProgress(`Сохранение "${originalName}"...`);
-          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, file, 'cbz');
-          if (shelfId) await assignComicToShelf(id, shelfId);
-          
-          if (openAfterImport) {
-            setActiveComicFile(file);
-            setActiveComicId(id);
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`Error importing file ${originalName}:`, err);
-      
-      // Provide a better error message for "corrupted zip" which often means a RAR file disguised as CBZ
-      const errMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
-      const isCorruptedZip = errMsg.toLowerCase().includes("can't find end of central directory");
-      
-      const userFriendlyMsg = isCorruptedZip 
-        ? `Архив повреждён или имеет неподдерживаемый формат (например, это .cbr/RAR файл, переименованный в .cbz). Поддерживаются только настоящие ZIP-архивы.`
-        : errMsg;
-        
-      if (openAfterImport) {
-        alert(`Не удалось загрузить "${originalName}": ${userFriendlyMsg}`);
-      } else {
-        // Just show a brief toast-like progress or ignore silently to not block bulk import
-        setImportProgress(`Ошибка: ${originalName} - ${userFriendlyMsg}`);
-        // We add a tiny delay so the user can see there was an error in progress, but we don't block
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-  };
-
   // Open file from Android content:// URI
   const handleOpenFileFromUri = async (uri: string) => {
     const bridge = (window as any).ComiFlowBridge;
@@ -217,14 +112,182 @@ function App() {
     }
   };
 
+  // Open file from native path (Capacitor local file URL)
+  const handleOpenFileFromNativePath = async (nativePath: string) => {
+    if (!libraryFolderUri) {
+      alert('Сначала выберите папку библиотеки, чтобы открывать файлы извне.');
+      return;
+    }
+    
+    setIsImporting(true);
+    setImportProgress('Добавление файла в библиотеку...');
+    try {
+      const baseName = nativePath.split('/').pop() || 'imported_file';
+      const cleanName = baseName.replace(/^open_\d+_/, '');
+      
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.importFileToLibrary === 'function') {
+         bridge.importFileToLibrary(nativePath, cleanName, libraryFolderUri);
+         await syncLibrary(libraryFolderUri);
+         
+         const list = await getAllComics();
+         setComics(list);
+         
+         // Find the newly added comic
+         const newComic = list.find(c => c.title === cleanName || c.uri.includes(cleanName));
+         if (newComic) {
+           await handleSelectComic(newComic.id);
+         }
+      }
+    } catch (err) {
+      console.error('Failed to open file from native path:', err);
+      alert(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+    } finally {
+      setIsImporting(false);
+      setImportProgress('');
+    }
+  };
+
+  // Helper to parse and save a single file during sync
+  const parseAndSaveNewComic = async (
+    file: File | Blob, 
+    originalName: string, 
+    isPdf: boolean, 
+    uri: string
+  ) => {
+    try {
+      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+      
+      if (isPdf) {
+        setImportProgress(`Обработка PDF "${originalName}"...`);
+        const parsed = await parsePDF(file as File, originalName);
+        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
+        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, uri, 'pdf');
+      } else {
+        setImportProgress(`Распаковка "${originalName}"...`);
+        const parsed = await parseCBZ(file, originalName);
+
+        if (parsed.type === 'collection') {
+          setImportProgress(`Вложенные архивы временно не поддерживаются в SAF-режиме.`);
+          await new Promise(r => setTimeout(r, 2000));
+        } else {
+          setImportProgress(`Сохранение "${originalName}"...`);
+          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, uri, 'cbz');
+        }
+      }
+    } catch (err) {
+      console.error(`Error importing file ${originalName}:`, err);
+      const errMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
+      const isCorruptedZip = errMsg.toLowerCase().includes("can't find end of central directory");
+      const userFriendlyMsg = isCorruptedZip 
+        ? `Архив повреждён или имеет неподдерживаемый формат.`
+        : errMsg;
+      setImportProgress(`Ошибка: ${originalName} - ${userFriendlyMsg}`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  };
+
+  // Sync SAF library
+  const syncLibrary = async (folderUri: string) => {
+    setIsImporting(true);
+    setImportProgress('Синхронизация библиотеки...');
+    try {
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.listLibraryFiles === 'function') {
+        const filesJson = bridge.listLibraryFiles(folderUri);
+        const safFiles = JSON.parse(filesJson);
+        
+        const existingComics = await getAllComics();
+        const existingUris = new Set(existingComics.map(c => c.uri));
+        
+        // Find deleted files
+        const safUris = new Set(safFiles.map((f: any) => f.uri));
+        let deletedCount = 0;
+        for (const comic of existingComics) {
+          if (!safUris.has(comic.uri)) {
+             await deleteComic(comic.id);
+             deletedCount++;
+          }
+        }
+        
+        // Find new files
+        let importedCount = 0;
+        for (const file of safFiles) {
+          if (!existingUris.has(file.uri)) {
+             setImportProgress(`Чтение нового файла: ${file.name}...`);
+             // Copy to cache to parse
+             const nativePath = bridge.copyContentUriToCache(file.uri);
+             if (nativePath) {
+               const capUrl = (window as any).Capacitor 
+                 ? (window as any).Capacitor.convertFileSrc(nativePath)
+                 : `http://localhost/_capacitor_file_${nativePath}`;
+               
+               const res = await fetch(capUrl);
+               if (res.ok) {
+                 const blob = await res.blob();
+                 const fObj = new File([blob], file.name, { type: blob.type });
+                 const lowerName = file.name.toLowerCase();
+                 const isPdf = lowerName.endsWith('.pdf');
+                 await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri);
+                 importedCount++;
+               }
+             }
+          }
+        }
+        
+        if (deletedCount > 0 || importedCount > 0) {
+          const list = await getAllComics();
+          setComics(list);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при синхронизации папки библиотеки.');
+    } finally {
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.clearImportCache === 'function') {
+        bridge.clearImportCache();
+      }
+      setIsImporting(false);
+      setImportProgress('');
+    }
+  };
+
+  const selectLibraryFolder = () => {
+    const bridge = (window as any).ComiFlowBridge;
+    if (bridge && typeof bridge.selectLibraryFolder === 'function') {
+      bridge.selectLibraryFolder();
+    } else {
+      alert('Выбор папки библиотеки поддерживается только на Android.');
+    }
+  };
+
   // Initialize DB and Load Settings, Comics & Shelves
   useEffect(() => {
     initDb();
     
+    const handleFolderSelected = (e: any) => {
+      const uri = e.detail?.uri;
+      if (uri) {
+        setLibraryFolderUri(uri);
+        syncLibrary(uri);
+      }
+    };
+    window.addEventListener('libraryFolderSelected', handleFolderSelected);
+    
     // Clear any leftover import caches from previous sessions
     const bridge = (window as any).ComiFlowBridge;
-    if (bridge && typeof bridge.clearImportCache === 'function') {
-      bridge.clearImportCache();
+    if (bridge) {
+      if (typeof bridge.clearImportCache === 'function') {
+        bridge.clearImportCache();
+      }
+      if (typeof bridge.getLibraryFolderUri === 'function') {
+        const uri = bridge.getLibraryFolderUri();
+        if (uri) {
+          setLibraryFolderUri(uri);
+          syncLibrary(uri);
+        }
+      }
     }
     
     // Load settings from localStorage
@@ -316,42 +379,42 @@ function App() {
   };
 
   // Import files
-  const handleImportFiles = async (files: FileList, shelfId: string | null = null) => {
-    setIsImporting(true);
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const lowerName = file.name.toLowerCase();
-      
-      const isPdf = lowerName.endsWith('.pdf');
-      const isCbz = lowerName.endsWith('.cbz') || lowerName.endsWith('.zip');
-      
-      if (!isPdf && !isCbz) {
-        alert(`Файл "${file.name}" имеет неподдерживаемый формат. Используйте файлы .cbz, .zip или .pdf.`);
-        continue;
-      }
-
-      await processSingleFileForImport(file, file.name, isPdf, shelfId, false);
+  const handleImportFiles = async (files: FileList) => {
+    if (!libraryFolderUri) {
+      alert('Сначала выберите папку библиотеки.');
+      return;
     }
-
-    // Refresh Library List
-    setImportProgress('Обновление библиотеки...');
+    
+    setIsImporting(true);
+    setImportProgress('Копирование файлов в библиотеку...');
+    
     try {
-      const list = await getAllComics();
-      // Revoke old object URLs first to prevent memory leak
-      comics.forEach((c) => {
-        if (c.coverUrl) URL.revokeObjectURL(c.coverUrl);
-      });
-      setComics(list);
-    } catch (err) {
-      console.error('Failed to refresh library:', err);
-    } finally {
       const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.clearImportCache === 'function') {
-        bridge.clearImportCache();
+      if (bridge && typeof bridge.importFileToLibrary === 'function') {
+        // Need to loop over native File objects. But wait, in web, we only have File objects, no paths!
+        // This is a limitation: we can't get the native path of an <input type="file"> file natively without Capacitor.
+        // As a workaround, we could write the blobs to a temp cache file, then call importFileToLibrary.
+        // Wait, in Capacitor, <input type="file"> files actually have a `path` property!
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i] as any;
+          if (file.path) { // Capacitor injects path on Android
+             setImportProgress(`Копирование ${file.name}...`);
+             bridge.importFileToLibrary(file.path, file.name, libraryFolderUri);
+          } else {
+             // Fallback for non-native context, though unlikely since we run in Capacitor
+             alert('Прямое добавление файлов поддерживается только в Android приложении.');
+          }
+        }
       }
+    } catch (err) {
+      console.error(err);
+      alert('Ошибка при импорте.');
+    } finally {
       setIsImporting(false);
       setImportProgress('');
+      
+      // Resync library after files are copied
+      await syncLibrary(libraryFolderUri);
     }
   };
 
@@ -360,15 +423,29 @@ function App() {
     setIsImporting(true);
     setImportProgress('Загрузка комикса из памяти устройства...');
     try {
-      const file = await getComicFile(id);
-      if (!file) {
-        throw new Error('Файл комикса не найден в локальной базе данных.');
+      const comic = comics.find((c) => c.id === id);
+      if (!comic) throw new Error('Комикс не найден.');
+      
+      const bridge = (window as any).ComiFlowBridge;
+      if (bridge && typeof bridge.copyContentUriToCache === 'function') {
+        const nativePath = bridge.copyContentUriToCache(comic.uri);
+        if (nativePath) {
+           const capUrl = (window as any).Capacitor 
+             ? (window as any).Capacitor.convertFileSrc(nativePath)
+             : `http://localhost/_capacitor_file_${nativePath}`;
+             
+           const res = await fetch(capUrl);
+           if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
+           const blob = await res.blob();
+           const file = new File([blob], comic.title, { type: blob.type });
+           
+           libraryScrollYRef.current = window.scrollY;
+           setActiveComicFile(file);
+           setActiveComicId(id);
+        } else {
+          throw new Error('Файл больше не доступен. Возможно, он был удалён.');
+        }
       }
-      
-      libraryScrollYRef.current = window.scrollY;
-      
-      setActiveComicFile(file);
-      setActiveComicId(id);
     } catch (err) {
       console.error('Error loading comic file:', err);
       alert(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
@@ -386,6 +463,11 @@ function App() {
     requestAnimationFrame(() => {
       window.scrollTo(0, libraryScrollYRef.current);
     });
+    
+    const bridge = (window as any).ComiFlowBridge;
+    if (bridge && typeof bridge.clearImportCache === 'function') {
+      bridge.clearImportCache();
+    }
     
     // Refresh progress state in library listing
     getAllComics().then((list) => {
@@ -532,7 +614,24 @@ function App() {
       )}
 
       {/* Library View */}
-      <div style={{ display: activeComicId ? 'none' : 'block', height: '100%' }}>
+      {!activeComicId && !libraryFolderUri && (
+        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-gray-50 dark:bg-gray-900 transition-colors">
+          <BookOpen className="w-24 h-24 mb-6 text-indigo-500 opacity-50" />
+          <h2 className="text-3xl font-bold mb-4 text-gray-800 dark:text-gray-100">Добро пожаловать в ComiFlow</h2>
+          <p className="text-lg text-gray-600 dark:text-gray-300 mb-8 max-w-md">
+            Для начала работы необходимо выбрать или создать папку на устройстве, где будут храниться ваши комиксы. 
+            Если вы добавите или удалите комиксы в этой папке, библиотека обновится автоматически!
+          </p>
+          <button
+            onClick={selectLibraryFolder}
+            className="px-8 py-4 bg-indigo-600 text-white rounded-2xl text-xl font-semibold shadow-lg hover:bg-indigo-700 active:scale-95 transition-all"
+          >
+            Выбрать папку библиотеки
+          </button>
+        </div>
+      )}
+
+      {!activeComicId && libraryFolderUri && (
         <Library
           comics={comics}
           onSelectComic={handleSelectComic}
@@ -549,7 +648,7 @@ function App() {
           activeShelfId={activeShelfId}
           setActiveShelfId={setActiveShelfId}
         />
-      </div>
+      )}
 
       {/* Reader View */}
       {activeComicId && activeComic && activeComicFile && (
@@ -631,7 +730,7 @@ function App() {
                 style={{ flex: 1 }}
                 onClick={() => {
                   setIsImportModalOpen(false);
-                  handleImportFiles(pendingFiles, importTargetShelfId);
+                  handleImportFiles(pendingFiles);
                   setPendingFiles(null);
                 }}
               >
