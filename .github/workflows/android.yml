@@ -60,29 +60,38 @@ jobs:
           cd android
           ./gradlew assembleDebug
 
+      - name: Calculate Semantic Version
+        id: version
+        run: |
+          OFFSET=$(( ${{ github.run_number }} - 24 ))
+          if [ $OFFSET -lt 0 ]; then OFFSET=0; fi
+          MINOR=$(( OFFSET / 10 ))
+          PATCH=$(( OFFSET % 10 ))
+          echo "version=1.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+
       - name: Rename APK for Release
         run: |
-          mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/ComiFlow-build-${{ github.run_number }}.apk
+          mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ComiFlow-Debug-APK-${{ github.run_number }}
-          path: android/app/build/outputs/apk/debug/ComiFlow-build-${{ github.run_number }}.apk
+          name: ComiFlow-v${{ steps.version.outputs.version }}
+          path: android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         if: github.event_name == 'push'
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('build-{0}', github.run_number) }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Сборка #{0}', github.run_number) }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('Версия {0}', steps.version.outputs.version) }}
           body: |
-            Автоматическая сборка приложения ComiFlow.
+            Автоматическая сборка приложения ComiFlow (Версия ${{ steps.version.outputs.version }}).
             
             **Последний коммит:** `${{ github.event.head_commit.message }}`
             **Хэш коммита:** `${{ github.sha }}`
           draft: false
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          files: android/app/build/outputs/apk/debug/ComiFlow-build-${{ github.run_number }}.apk
+          files: android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
