@@ -50,12 +50,12 @@ public class MainActivity extends BridgeActivity {
             public void selectLibraryFolder() {
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-                startActivityForResult(intent, REQUEST_CODE_OPEN_DOCUMENT_TREE);
+                MainActivity.this.startActivityForResult(intent, REQUEST_CODE_OPEN_DOCUMENT_TREE);
             }
 
             @JavascriptInterface
             public String getLibraryFolderUri() {
-                SharedPreferences prefs = getSharedPreferences("ComiFlowPrefs", MODE_PRIVATE);
+                SharedPreferences prefs = MainActivity.this.getSharedPreferences("ComiFlowPrefs", MODE_PRIVATE);
                 return prefs.getString("libraryFolderUri", null);
             }
 
@@ -76,7 +76,7 @@ public class MainActivity extends BridgeActivity {
                         DocumentsContract.Document.COLUMN_MIME_TYPE
                     };
                     
-                    Cursor cursor = getContentResolver().query(childrenUri, projection, null, null, null);
+                    Cursor cursor = MainActivity.this.getContentResolver().query(childrenUri, projection, null, null, null);
                     if (cursor != null) {
                         while (cursor.moveToNext()) {
                             String mimeType = cursor.getString(4);
@@ -126,7 +126,7 @@ public class MainActivity extends BridgeActivity {
                         DocumentFile newFile = folder.createFile("application/zip", destFileName);
                         if (newFile != null) {
                             java.io.InputStream is = new java.io.FileInputStream(sourcePath);
-                            java.io.OutputStream os = getContentResolver().openOutputStream(newFile.getUri());
+                            java.io.OutputStream os = MainActivity.this.getContentResolver().openOutputStream(newFile.getUri());
                             byte[] buffer = new byte[8192];
                             int read;
                             while ((read = is.read(buffer)) != -1) {
@@ -150,7 +150,7 @@ public class MainActivity extends BridgeActivity {
                     
                     // Resolve original display name using ContentResolver
                     String fileName = "temp_comic.cbz";
-                    android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+                    android.database.Cursor cursor = MainActivity.this.getContentResolver().query(uri, null, null, null, null);
                     if (cursor != null) {
                         int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
                         if (nameIndex != -1 && cursor.moveToFirst()) {
@@ -162,8 +162,8 @@ public class MainActivity extends BridgeActivity {
                     // Clean filename to prevent traversal issues
                     fileName = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
                     
-                    java.io.File tempFile = new java.io.File(getCacheDir(), "open_" + System.currentTimeMillis() + "_" + fileName);
-                    java.io.InputStream is = getContentResolver().openInputStream(uri);
+                    java.io.File tempFile = new java.io.File(MainActivity.this.getCacheDir(), "open_" + System.currentTimeMillis() + "_" + fileName);
+                    java.io.InputStream is = MainActivity.this.getContentResolver().openInputStream(uri);
                     java.io.FileOutputStream os = new java.io.FileOutputStream(tempFile);
                     
                     byte[] buffer = new byte[8192];
@@ -186,7 +186,7 @@ public class MainActivity extends BridgeActivity {
             public void clearImportCache() {
                 try {
                     // Delete all "open_*" files in cache dir
-                    java.io.File cacheDir = getCacheDir();
+                    java.io.File cacheDir = MainActivity.this.getCacheDir();
                     if (cacheDir != null && cacheDir.isDirectory()) {
                         java.io.File[] files = cacheDir.listFiles();
                         if (files != null) {
