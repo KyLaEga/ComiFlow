@@ -304,8 +304,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </label>
           </div>
         </div>
-
-        </div>
       </div>
     </div>
   );
