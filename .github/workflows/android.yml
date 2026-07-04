@@ -46,19 +46,6 @@ jobs:
       - name: Sync Capacitor Android
         run: npx cap sync
 
-      - name: Cache Android Debug Keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-debug-keystore
-
-      - name: Ensure Debug Keystore Exists
-        run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
       - name: Calculate Semantic Version
         id: version
         run: |
@@ -71,20 +58,20 @@ jobs:
       - name: Make Gradle Executable
         run: chmod +x android/gradlew
 
-      - name: Build APK (Debug)
+      - name: Build APK (Release)
         run: |
           cd android
-          ./gradlew assembleDebug -PversionCode=${{ github.run_number }} -PversionName="${{ steps.version.outputs.version }}"
+          ./gradlew assembleRelease -PversionCode=${{ github.run_number }} -PversionName="${{ steps.version.outputs.version }}"
 
       - name: Rename APK for Release
         run: |
-          mv android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
+          mv android/app/build/outputs/apk/release/app-release.apk ComiFlow-v${{ steps.version.outputs.version }}.apk
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ComiFlow-v${{ steps.version.outputs.version }}
-          path: android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
+          name: release-apk
+          path: ComiFlow-v${{ steps.version.outputs.version }}.apk
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
