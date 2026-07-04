@@ -59,15 +59,9 @@ public class MainActivity extends BridgeActivity {
                 return prefs.getString("libraryFolderUri", null);
             }
 
-            @JavascriptInterface
-            public String listLibraryFiles(String treeUriStr) {
+            private void traverseDirectorySaf(Uri treeUri, String docId, String currentPath, JSONArray filesArray) {
                 try {
-                    Uri treeUri = Uri.parse(treeUriStr);
-                    String docId = DocumentsContract.getTreeDocumentId(treeUri);
                     Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId);
-                    
-                    JSONArray filesArray = new JSONArray();
-                    
                     String[] projection = new String[]{
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -75,28 +69,25 @@ public class MainActivity extends BridgeActivity {
                         DocumentsContract.Document.COLUMN_LAST_MODIFIED,
                         DocumentsContract.Document.COLUMN_MIME_TYPE
                     };
-                    
                     Cursor cursor = MainActivity.this.getContentResolver().query(childrenUri, projection, null, null, null);
                     if (cursor != null) {
                         while (cursor.moveToNext()) {
+                            String childDocId = cursor.getString(0);
+                            String displayName = cursor.getString(1);
+                            if (displayName == null || displayName.startsWith(".") || displayName.startsWith("._")) continue;
+                            
                             String mimeType = cursor.getString(4);
                             if (mimeType != null && mimeType.equals(DocumentsContract.Document.MIME_TYPE_DIR)) {
-                                continue; // Skip directories
+                                String newPath = currentPath.isEmpty() ? displayName : currentPath + " / " + displayName;
+                                traverseDirectorySaf(treeUri, childDocId, newPath, filesArray);
+                                continue;
                             }
-                            
-                            String displayName = cursor.getString(1);
-                            if (displayName == null) continue;
                             
                             String lowerName = displayName.toLowerCase();
                             if (!lowerName.endsWith(".cbz") && !lowerName.endsWith(".zip") && !lowerName.endsWith(".pdf")) {
-                                continue; // Only include supported formats
+                                continue;
                             }
                             
-                            if (displayName.startsWith(".") || displayName.startsWith("._")) {
-                                continue; // Skip dotfiles
-                            }
-                            
-                            String childDocId = cursor.getString(0);
                             long size = cursor.getLong(2);
                             long lastModified = cursor.getLong(3);
                             Uri documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId);
@@ -106,10 +97,23 @@ public class MainActivity extends BridgeActivity {
                             fileObj.put("uri", documentUri.toString());
                             fileObj.put("size", size);
                             fileObj.put("lastModified", lastModified);
+                            fileObj.put("shelfName", currentPath); // Track folder path
                             filesArray.put(fileObj);
                         }
                         cursor.close();
                     }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @JavascriptInterface
+            public String listLibraryFiles(String treeUriStr) {
+                try {
+                    Uri treeUri = Uri.parse(treeUriStr);
+                    String docId = DocumentsContract.getTreeDocumentId(treeUri);
+                    JSONArray filesArray = new JSONArray();
+                    traverseDirectorySaf(treeUri, docId, "", filesArray);
                     return filesArray.toString();
                 } catch (Exception e) {
                     e.printStackTrace();

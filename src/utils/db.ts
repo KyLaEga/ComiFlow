@@ -66,7 +66,8 @@ export async function saveComic(
   pages: string[],
   coverBlob: Blob,
   uri: string,
-  format: 'cbz' | 'pdf'
+  format: 'cbz' | 'pdf',
+  shelfId: string | null = null
 ): Promise<ComicMetadata> {
   const metadata: ComicMetadata = {
     id,
@@ -80,7 +81,7 @@ export async function saveComic(
     coverBlob,
     format,
     uri,
-    shelfId: null,
+    shelfId,
   };
 
   // Save metadata

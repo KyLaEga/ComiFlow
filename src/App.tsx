@@ -153,7 +153,8 @@ function App() {
     file: File | Blob, 
     originalName: string, 
     isPdf: boolean, 
-    uri: string
+    uri: string,
+    shelfId: string | null
   ) => {
     try {
       const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
@@ -162,7 +163,7 @@ function App() {
         setImportProgress(`Обработка PDF "${originalName}"...`);
         const parsed = await parsePDF(file as File, originalName);
         const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
-        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, uri, 'pdf');
+        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, uri, 'pdf', shelfId);
       } else {
         setImportProgress(`Распаковка "${originalName}"...`);
         const parsed = await parseCBZ(file, originalName);
@@ -172,7 +173,7 @@ function App() {
           await new Promise(r => setTimeout(r, 2000));
         } else {
           setImportProgress(`Сохранение "${originalName}"...`);
-          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, uri, 'cbz');
+          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, uri, 'cbz', shelfId);
         }
       }
     } catch (err) {
@@ -212,8 +213,27 @@ function App() {
         
         // Find new files
         let importedCount = 0;
+        let currentShelves = [...shelves];
+        let shelvesUpdated = false;
+
         for (const file of safFiles) {
           if (!existingUris.has(file.uri)) {
+             let targetShelfId = null;
+             
+             // Auto-create shelf if file is in a subfolder
+             if (file.shelfName && file.shelfName.trim() !== '') {
+               const shelfName = file.shelfName.trim();
+               let existingShelf = currentShelves.find(s => s.name === shelfName);
+               if (!existingShelf) {
+                 setImportProgress(`Создание полки "${shelfName}"...`);
+                 const newShelfId = `shelf_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+                 existingShelf = await saveShelf(newShelfId, shelfName);
+                 currentShelves.push(existingShelf);
+                 shelvesUpdated = true;
+               }
+               targetShelfId = existingShelf.id;
+             }
+
              setImportProgress(`Чтение нового файла: ${file.name}...`);
              // Copy to cache to parse
              const nativePath = bridge.copyContentUriToCache(file.uri);
@@ -228,11 +248,16 @@ function App() {
                  const fObj = new File([blob], file.name, { type: blob.type });
                  const lowerName = file.name.toLowerCase();
                  const isPdf = lowerName.endsWith('.pdf');
-                 await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri);
+                 await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri, targetShelfId);
                  importedCount++;
                }
              }
           }
+        }
+        
+        if (shelvesUpdated) {
+          const updatedShelvesList = await getAllShelves();
+          setShelves(updatedShelvesList);
         }
         
         if (deletedCount > 0 || importedCount > 0) {
