@@ -59,14 +59,6 @@ jobs:
             keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Make Gradle Executable
-        run: chmod +x android/gradlew
-
-      - name: Build APK (Debug)
-        run: |
-          cd android
-          ./gradlew assembleDebug
-
       - name: Calculate Semantic Version
         id: version
         run: |
@@ -76,10 +68,15 @@ jobs:
           PATCH=$(( OFFSET % 10 ))
           echo "version=1.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
 
-      - name: Update Android Version
+      - name: Make Gradle Executable
+        run: chmod +x android/gradlew
+
+      - name: Build APK (Debug)
         run: |
-          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
-          sed -i "s/versionName \"1.0\"/versionName \"${{ steps.version.outputs.version }}\"/" android/app/build.gradle
+          cd android
+          ./gradlew assembleDebug
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
 
       - name: Rename APK for Release
         run: |
