@@ -8,9 +8,11 @@ export async function resizeCover(blob: Blob, maxDimension = 640): Promise<Blob>
     return blob;
   }
 
+  const imageBlob = blob.type ? blob : new Blob([blob], { type: 'image/jpeg' });
+
   return new Promise((resolve) => {
     const img = new Image();
-    const url = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(imageBlob);
     
     img.onload = () => {
       URL.revokeObjectURL(url);

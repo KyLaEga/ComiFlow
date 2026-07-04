@@ -84,7 +84,17 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
       throw new Error('Не удалось прочитать обложку комикса.');
     }
 
-    const coverBlob = await coverZipFile.async('blob');
+    const rawCoverBlob = await coverZipFile.async('blob');
+    
+    // Assign proper MIME type based on file extension
+    const ext = coverPath.split('.').pop()?.toLowerCase() || 'jpg';
+    let mimeType = 'image/jpeg';
+    if (ext === 'png') mimeType = 'image/png';
+    else if (ext === 'webp') mimeType = 'image/webp';
+    else if (ext === 'gif') mimeType = 'image/gif';
+    else if (ext === 'bmp') mimeType = 'image/bmp';
+    
+    const coverBlob = new Blob([rawCoverBlob], { type: mimeType });
     
     // Remove extension for title
     const title = originalName.replace(/\.[^/.]+$/, "");
