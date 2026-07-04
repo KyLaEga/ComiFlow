@@ -86,6 +86,6 @@ jobs:
             **Хэш коммита:** `${{ github.sha }}`
           draft: false
           prerelease: false
-          files: android/app/build/outputs/apk/debug/ComiFlow-v${{ steps.version.outputs.version }}.apk
+          files: ComiFlow-v${{ steps.version.outputs.version }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
