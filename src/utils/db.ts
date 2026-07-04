@@ -1,4 +1,5 @@
 import localforage from 'localforage';
+import { resizeCover } from './image';
 
 // Define the structure of comic metadata
 export interface ComicMetadata {
@@ -41,6 +42,32 @@ export const initDb = () => {
 initDb();
 
 /**
+ * Background migration to compress previously saved bloated covers
+ */
+export async function migrateCovers(): Promise<void> {
+  try {
+    const keys = await metadataStore.keys();
+    for (const key of keys) {
+      const value = await metadataStore.getItem<ComicMetadata>(key);
+      if (value && value.coverBlob && value.coverBlob.size > 120 * 1024) {
+        const compressed = await resizeCover(value.coverBlob);
+        if (compressed.size < value.coverBlob.size) {
+          value.coverBlob = compressed;
+          await metadataStore.setItem(key, value);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Failed to run cover migration:', err);
+  }
+}
+
+// Run cover size optimization in the background shortly after startup
+setTimeout(() => {
+  migrateCovers().catch(console.error);
+}, 2000);
+
+/**
  * Get all comics metadata from database
  */
 export async function getAllComics(): Promise<ComicMetadata[]> {
@@ -69,6 +96,9 @@ export async function saveComic(
   format: 'cbz' | 'pdf',
   shelfId: string | null = null
 ): Promise<ComicMetadata> {
+  // Compress and resize the cover image to prevent DB storage bloat
+  const compressedCover = await resizeCover(coverBlob);
+
   const metadata: ComicMetadata = {
     id,
     title,
@@ -78,7 +108,7 @@ export async function saveComic(
     currentPage: 0,
     totalPages: pages.length,
     pages,
-    coverBlob,
+    coverBlob: compressedCover,
     format,
     uri,
     shelfId,
@@ -88,7 +118,7 @@ export async function saveComic(
   await metadataStore.setItem(id, metadata);
 
   // Add cover URL for runtime display
-  metadata.coverUrl = URL.createObjectURL(coverBlob);
+  metadata.coverUrl = URL.createObjectURL(compressedCover);
   return metadata;
 }
 
