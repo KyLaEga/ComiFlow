@@ -1,8 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Library } from './components/Library';
-import { Reader } from './components/Reader';
-import { Settings } from './components/Settings';
 import type { ReaderSettings } from './components/Settings';
 import { 
   getAllComics, 
@@ -15,9 +13,10 @@ import {
   assignComicToShelf
 } from './utils/db';
 import type { ComicMetadata, Shelf } from './utils/db';
-import { parseCBZ } from './utils/cbz';
-import { parsePDF } from './utils/pdf';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
+
+const Reader = lazy(() => import('./components/Reader').then(m => ({ default: m.Reader })));
+const Settings = lazy(() => import('./components/Settings').then(m => ({ default: m.Settings })));
 import './App.css';
 
 
@@ -161,11 +160,13 @@ function App() {
       
       if (isPdf) {
         setImportProgress(`Обработка PDF "${originalName}"...`);
+        const { parsePDF } = await import('./utils/pdf');
         const parsed = await parsePDF(file as File, originalName);
         const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
         await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, uri, 'pdf', shelfId);
       } else {
         setImportProgress(`Распаковка "${originalName}"...`);
+        const { parseCBZ } = await import('./utils/cbz');
         const parsed = await parseCBZ(file, originalName);
 
         if (parsed.type === 'collection') {
@@ -685,29 +686,35 @@ function App() {
       )}
 
       {/* Reader View */}
-      {activeComicId && activeComic && activeComicFile && (
-        <Reader
-          key={activeComic.id}
-          comic={activeComic}
-          fileBlob={activeComicFile}
-          settings={settings}
-          onClose={handleCloseReader}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          shelfComics={shelfComics}
-          onSelectComic={handleSelectComic}
-        />
-      )}
+      {activeComicId && activeComic && activeComicFile ? (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-white"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#ff3366]"></div></div>}>
+          <Reader
+            key={activeComic.id}
+            comic={activeComic}
+            fileBlob={activeComicFile}
+            settings={settings}
+            onClose={handleCloseReader}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+            shelfComics={shelfComics}
+            onSelectComic={handleSelectComic}
+          />
+        </Suspense>
+      ) : null}
 
       {/* Settings Panel */}
-      <Settings
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-        onClearLibrary={handleClearLibrary}
-        onChangeLibraryFolder={selectLibraryFolder}
-        libraryFolderUri={libraryFolderUri}
-      />
+      {isSettingsOpen && (
+        <Suspense fallback={<div className="flex h-screen items-center justify-center text-white"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#ff3366]"></div></div>}>
+          <Settings
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onClearLibrary={handleClearLibrary}
+            onChangeLibraryFolder={selectLibraryFolder}
+            libraryFolderUri={libraryFolderUri}
+          />
+        </Suspense>
+      )}
 
       {/* Import Shelf Selection Modal */}
       {isImportModalOpen && pendingFiles && (

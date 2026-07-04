@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { VirtuosoGrid } from 'react-virtuoso';
 import type { ComicMetadata, Shelf } from '../utils/db';
 import { BookOpen, Plus, Search, Trash2, FolderOpen, AlertTriangle } from 'lucide-react';
 
@@ -284,12 +285,15 @@ export const Library: React.FC<LibraryProps> = ({
 
       {/* Comics Grid */}
       {sortedComics.length > 0 ? (
-        <div className="comic-grid">
-          {sortedComics.map((comic) => {
+        <VirtuosoGrid
+          useWindowScroll
+          data={sortedComics}
+          listClassName="comic-grid"
+          itemContent={(_, comic) => {
             const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
             
             return (
-              <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} key={comic.id} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
+              <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
                 {/* Actions overlay */}
                 <div className="card-actions-overlay">
                   <button
@@ -395,8 +399,8 @@ export const Library: React.FC<LibraryProps> = ({
                 </div>
               </div>
             );
-          })}
-        </div>
+          }}
+        />
       ) : (
         comics.length > 0 && (
           <div className="empty-state">
