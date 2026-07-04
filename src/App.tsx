@@ -83,6 +83,12 @@ function App() {
         requestAnimationFrame(() => {
           window.scrollTo(0, libraryScrollYRef.current);
         });
+
+        // Clear import cache immediately
+        const bridge = (window as any).ComiFlowBridge;
+        if (bridge && typeof bridge.clearImportCache === 'function') {
+          bridge.clearImportCache();
+        }
       } else {
         // If library is open, exit app
         CapacitorApp.exitApp();

@@ -2,9 +2,9 @@
  * Resizes and compresses an image Blob to a maximum dimension using WebP
  * to minimize IndexedDB storage requirements and prevent user data bloat.
  */
-export async function resizeCover(blob: Blob, maxDimension = 360): Promise<Blob> {
-  // If the blob is extremely small already (e.g. < 50KB), just save it as is
-  if (blob.size < 50 * 1024) {
+export async function resizeCover(blob: Blob, maxDimension = 640): Promise<Blob> {
+  // If the blob is extremely small already (e.g. < 80KB), just save it as is
+  if (blob.size < 80 * 1024) {
     return blob;
   }
 
@@ -44,7 +44,9 @@ export async function resizeCover(blob: Blob, maxDimension = 360): Promise<Blob>
         return;
       }
       
-      // Draw image onto canvas (downscaling)
+      // Draw image onto canvas (downscaling with high quality smoothing)
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0, width, height);
       
       // Convert to compressed WebP blob
@@ -57,7 +59,7 @@ export async function resizeCover(blob: Blob, maxDimension = 360): Promise<Blob>
           }
         },
         'image/webp',
-        0.75 // Quality
+        0.80 // Quality
       );
     };
     
