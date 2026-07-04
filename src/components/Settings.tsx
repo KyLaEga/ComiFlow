@@ -68,33 +68,30 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Хранилище */}
-        <div className="mb-8">
-          <h3 className="text-sm font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">
-            Хранилище
-          </h3>
-          <div className="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden border border-gray-100 dark:border-gray-700">
-            {libraryFolderUri && (
-              <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-850">
-                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Выбранная папка библиотеки:</div>
-                <div className="text-sm font-mono text-gray-800 dark:text-gray-200 truncate" title={decodeURIComponent(libraryFolderUri)}>
-                  {decodeURIComponent(libraryFolderUri).split('/').pop()}
-                </div>
+        <div className="settings-section">
+          <span className="settings-section-title">Хранилище</span>
+          
+          {libraryFolderUri && (
+            <div style={{ padding: '12px', marginBottom: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Выбранная папка:</div>
+              <div style={{ fontSize: '14px', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
+                {decodeURIComponent(libraryFolderUri).split('/').pop()}
               </div>
-            )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button
               onClick={() => {
                 onChangeLibraryFolder();
                 onClose();
               }}
-              className="w-full text-left p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors flex items-center justify-between border-b border-gray-100 dark:border-gray-700"
+              className="btn"
+              style={{ width: '100%', justifyContent: 'center', backgroundColor: 'var(--bg-tertiary)' }}
             >
-              <div>
-                <div className="font-medium text-indigo-600 dark:text-indigo-400">Сменить папку библиотеки</div>
-                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  Выбрать другую папку для ваших комиксов
-                </div>
-              </div>
+              Сменить папку библиотеки
             </button>
+
             <button
               onClick={() => {
                 if (window.confirm('Вы уверены, что хотите удалить базу данных и отвязать папку? Файлы на устройстве останутся.')) {
@@ -102,21 +99,18 @@ export const Settings: React.FC<SettingsProps> = ({
                   onClose();
                 }
               }}
-              className="w-full text-left p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors flex items-center justify-between"
+              className="btn btn-danger"
+              style={{ width: '100%', justifyContent: 'center' }}
             >
-              <div>
-                <div className="font-medium text-red-600 dark:text-red-400">Очистить базу данных</div>
-                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  Сбросить полки и прогресс чтения
-                </div>
-              </div>
+              Очистить базу данных
             </button>
-            {storageUsage && (
-              <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-100 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400 text-center">
-                {storageUsage}
-              </div>
-            )}
           </div>
+
+          {storageUsage && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', marginTop: '16px' }}>
+              {storageUsage}
+            </div>
+          )}
         </div>
 
         {/* Theme Settings */}
