@@ -74,9 +74,7 @@ jobs:
       - name: Build APK (Debug)
         run: |
           cd android
-          ./gradlew assembleDebug
-        env:
-          APP_VERSION: ${{ steps.version.outputs.version }}
+          ./gradlew assembleDebug -PversionCode=${{ github.run_number }} -PversionName="${{ steps.version.outputs.version }}"
 
       - name: Rename APK for Release
         run: |
