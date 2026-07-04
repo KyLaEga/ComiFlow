@@ -62,10 +62,6 @@ export async function migrateCovers(): Promise<void> {
   }
 }
 
-// Run cover size optimization in the background shortly after startup
-setTimeout(() => {
-  migrateCovers().catch(console.error);
-}, 2000);
 
 /**
  * Get all comics metadata from database
