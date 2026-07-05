@@ -121,6 +121,97 @@ public class MainActivity extends BridgeActivity {
                 }
             }
 
+            private final java.util.Map<String, java.io.File> activeImports = new java.util.HashMap<>();
+            private final java.util.Map<String, String> importDestNames = new java.util.HashMap<>();
+            private final java.util.Map<String, String> importFolderUris = new java.util.HashMap<>();
+
+            @JavascriptInterface
+            public String startChunkedImport(String fileName, long totalSize, String folderUriStr) {
+                try {
+                    String importId = "import_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+                    java.io.File tempFile = new java.io.File(MainActivity.this.getCacheDir(), "chunk_" + importId);
+                    if (tempFile.createNewFile()) {
+                        activeImports.put(importId, tempFile);
+                        importDestNames.put(importId, fileName);
+                        importFolderUris.put(importId, folderUriStr);
+                        return importId;
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return null;
+            }
+
+            @JavascriptInterface
+            public boolean appendChunk(String importId, String base64Data) {
+                try {
+                    java.io.File tempFile = activeImports.get(importId);
+                    if (tempFile != null && tempFile.exists()) {
+                        byte[] data = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT);
+                        java.io.FileOutputStream fos = new java.io.FileOutputStream(tempFile, true);
+                        fos.write(data);
+                        fos.close();
+                        return true;
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return false;
+            }
+
+            @JavascriptInterface
+            public boolean finishChunkedImport(String importId) {
+                try {
+                    java.io.File tempFile = activeImports.remove(importId);
+                    String destFileName = importDestNames.remove(importId);
+                    String folderUriStr = importFolderUris.remove(importId);
+                    
+                    if (tempFile != null && tempFile.exists() && destFileName != null && folderUriStr != null) {
+                        Uri folderUri = Uri.parse(folderUriStr);
+                        DocumentFile folder = DocumentFile.fromTreeUri(MainActivity.this, folderUri);
+                        if (folder != null) {
+                            String mimeType = "application/octet-stream";
+                            String lower = destFileName.toLowerCase();
+                            if (lower.endsWith(".pdf")) mimeType = "application/pdf";
+                            else if (lower.endsWith(".cbz") || lower.endsWith(".zip")) mimeType = "application/x-cbz";
+                            
+                            DocumentFile newFile = folder.createFile(mimeType, destFileName);
+                            if (newFile != null) {
+                                java.io.InputStream is = new java.io.FileInputStream(tempFile);
+                                java.io.OutputStream os = MainActivity.this.getContentResolver().openOutputStream(newFile.getUri());
+                                byte[] buffer = new byte[8192];
+                                int read;
+                                while ((read = is.read(buffer)) != -1) {
+                                    os.write(buffer, 0, read);
+                                }
+                                is.close();
+                                os.close();
+                                tempFile.delete();
+                                return true;
+                            }
+                        }
+                        tempFile.delete();
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                return false;
+            }
+
+            @JavascriptInterface
+            public void cancelChunkedImport(String importId) {
+                try {
+                    java.io.File tempFile = activeImports.remove(importId);
+                    importDestNames.remove(importId);
+                    importFolderUris.remove(importId);
+                    if (tempFile != null && tempFile.exists()) {
+                        tempFile.delete();
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
             @JavascriptInterface
             public boolean importFileToLibrary(String sourcePath, String destFileName, String folderUriStr) {
                 try {

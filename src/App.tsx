@@ -22,6 +22,16 @@ import './App.css';
 
 const LOCAL_STORAGE_KEY = 'comiflow_settings';
 
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return window.btoa(binary);
+};
+
 const DEFAULT_SETTINGS: ReaderSettings = {
   theme: 'dark',
   direction: 'ltr',
@@ -422,18 +432,44 @@ function App() {
     
     try {
       const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.importFileToLibrary === 'function') {
-        // Need to loop over native File objects. But wait, in web, we only have File objects, no paths!
-        // This is a limitation: we can't get the native path of an <input type="file"> file natively without Capacitor.
-        // As a workaround, we could write the blobs to a temp cache file, then call importFileToLibrary.
-        // Wait, in Capacitor, <input type="file"> files actually have a `path` property!
+      if (bridge) {
+        const CHUNK_SIZE = 1024 * 1024; // 1MB chunk size
         for (let i = 0; i < files.length; i++) {
-          const file = files[i] as any;
-          if (file.path) { // Capacitor injects path on Android
+          const file = files[i];
+          const fileAny = file as any;
+          
+          if (fileAny.path && typeof bridge.importFileToLibrary === 'function') { // Capacitor injects path on Android
              setImportProgress(`Копирование ${file.name}...`);
-             bridge.importFileToLibrary(file.path, file.name, libraryFolderUri);
+             bridge.importFileToLibrary(fileAny.path, file.name, libraryFolderUri);
+          } else if (typeof bridge.startChunkedImport === 'function') {
+             setImportProgress(`Подготовка к копированию ${file.name}...`);
+             const importId = bridge.startChunkedImport(file.name, file.size, libraryFolderUri);
+             if (!importId) throw new Error(`Не удалось начать импорт ${file.name}`);
+             
+             let offset = 0;
+             const totalSize = file.size;
+             
+             while (offset < totalSize) {
+               const chunk = file.slice(offset, offset + CHUNK_SIZE);
+               const arrayBuffer = await chunk.arrayBuffer();
+               const base64 = arrayBufferToBase64(arrayBuffer);
+               
+               const success = bridge.appendChunk(importId, base64);
+               if (!success) {
+                 bridge.cancelChunkedImport(importId);
+                 throw new Error(`Ошибка передачи данных для ${file.name}`);
+               }
+               
+               offset += CHUNK_SIZE;
+               const progress = Math.min(100, Math.round((offset / totalSize) * 100));
+               setImportProgress(`Копирование ${file.name}: ${progress}%`);
+             }
+             
+             const finished = bridge.finishChunkedImport(importId);
+             if (!finished) {
+               throw new Error(`Не удалось завершить копирование ${file.name}`);
+             }
           } else {
-             // Fallback for non-native context, though unlikely since we run in Capacitor
              alert('Прямое добавление файлов поддерживается только в Android приложении.');
           }
         }
