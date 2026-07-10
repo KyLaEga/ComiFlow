@@ -40,11 +40,12 @@ export const Library: React.FC<LibraryProps> = ({
   onSyncLibrary,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent'>('added');
+  const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>('added');
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -73,9 +74,6 @@ export const Library: React.FC<LibraryProps> = ({
     }
   };
 
-  const triggerFileSelect = () => {
-    fileInputRef.current?.click();
-  };
 
   const handleCardClick = (comicId: string) => {
     if (isSelectMode) {
@@ -125,6 +123,9 @@ export const Library: React.FC<LibraryProps> = ({
       // Put read items first, sorted by last read time
       return timeB - timeA;
     }
+    if (sortBy === 'size') {
+      return b.size - a.size;
+    }
     // Default: 'added' (newest first)
     return b.addedAt - a.addedAt;
   });
@@ -138,7 +139,6 @@ export const Library: React.FC<LibraryProps> = ({
         onDragOver={handleDrag}
         onDragLeave={handleDrag}
         onDrop={handleDrop}
-        onClick={triggerFileSelect}
       >
         <input
           type="file"
@@ -148,12 +148,47 @@ export const Library: React.FC<LibraryProps> = ({
           multiple
           style={{ display: 'none' }}
         />
+        <input
+          type="file"
+          ref={folderInputRef}
+          onChange={handleFileChange}
+          {...({
+            webkitdirectory: "true",
+            directory: ""
+          } as any)}
+          multiple
+          style={{ display: 'none' }}
+        />
         <div className="dropzone-icon">
           <Plus size={32} />
         </div>
-        <div className="dropzone-text">Загрузите файлы (.cbz, .zip, .pdf)</div>
-        <div className="dropzone-subtext">
-          Перетащите файлы сюда или нажмите для выбора на устройстве
+        <div className="dropzone-text">Загрузите комиксы или папки</div>
+        <div className="dropzone-subtext" style={{ marginBottom: '12px' }}>
+          Перетащите сюда файлы или папки, либо используйте кнопки ниже
+        </div>
+        <div style={{ display: 'flex', gap: '10px', zIndex: 10 }}>
+          <button
+            type="button"
+            className="shelf-tab-btn"
+            style={{ padding: '6px 12px', fontSize: '13px', backgroundColor: 'var(--bg-primary)' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              fileInputRef.current?.click();
+            }}
+          >
+            Выбрать файлы
+          </button>
+          <button
+            type="button"
+            className="shelf-tab-btn"
+            style={{ padding: '6px 12px', fontSize: '13px', backgroundColor: 'var(--bg-primary)' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              folderInputRef.current?.click();
+            }}
+          >
+            Выбрать папку
+          </button>
         </div>
       </div>
 
@@ -216,7 +251,7 @@ export const Library: React.FC<LibraryProps> = ({
             />
           </div>
 
-          <div className="filter-options" style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div className="filter-options" style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <button
               className="shelf-tab-btn"
               style={{ padding: '6px 12px', fontSize: '12px' }}
@@ -246,49 +281,68 @@ export const Library: React.FC<LibraryProps> = ({
               <option value="added">Сначала новые</option>
               <option value="recent">Недавно прочитанные</option>
               <option value="title">По названию</option>
+              <option value="size">По размеру</option>
             </select>
           </div>
         </div>
       )}
 
       {/* Bulk Operations Action Bar */}
-      {isSelectMode && selectedComicIds.size > 0 && (
+      {isSelectMode && (
         <div className="library-controls" style={{ backgroundColor: 'var(--accent-light)', padding: '12px 16px', borderRadius: '16px', border: '1px solid var(--accent-border)', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--accent)' }}>
-            Выбрано файлов: {selectedComicIds.size}
-          </span>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <select
-              className="card-shelf-select"
-              style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
-              defaultValue=""
-              onChange={(e) => {
-                const val = e.target.value;
-                onBulkAssignComicsToShelf(Array.from(selectedComicIds), val === '' ? null : val);
-                setSelectedComicIds(new Set());
-                setIsSelectMode(false);
-              }}
-            >
-              <option value="" disabled>Переместить на полку...</option>
-              <option value="">Без полки (Главная)</option>
-              {shelves.map((shelf) => (
-                <option key={shelf.id} value={shelf.id}>
-                  Полка: {shelf.name}
-                </option>
-              ))}
-            </select>
+            <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--accent)' }}>
+              Выбрано файлов: {selectedComicIds.size}
+            </span>
             <button
-              className="btn btn-danger"
-              style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px' }}
+              type="button"
+              className="shelf-tab-btn"
+              style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: 'var(--bg-primary)' }}
               onClick={() => {
-                onBulkDeleteComics(Array.from(selectedComicIds));
-                setSelectedComicIds(new Set());
-                setIsSelectMode(false);
+                if (selectedComicIds.size === sortedComics.length) {
+                  setSelectedComicIds(new Set());
+                } else {
+                  setSelectedComicIds(new Set(sortedComics.map((c) => c.id)));
+                }
               }}
             >
-              <Trash2 size={14} /> Удалить ({selectedComicIds.size})
+              {selectedComicIds.size === sortedComics.length ? 'Снять выделение' : 'Выбрать всё'}
             </button>
           </div>
+          {selectedComicIds.size > 0 && (
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+              <select
+                className="card-shelf-select"
+                style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
+                defaultValue=""
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onBulkAssignComicsToShelf(Array.from(selectedComicIds), val === '' ? null : val);
+                  setSelectedComicIds(new Set());
+                  setIsSelectMode(false);
+                }}
+              >
+                <option value="" disabled>Переместить на полку...</option>
+                <option value="">Без полки (Главная)</option>
+                {shelves.map((shelf) => (
+                  <option key={shelf.id} value={shelf.id}>
+                    Полка: {shelf.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn btn-danger"
+                style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px' }}
+                onClick={() => {
+                  onBulkDeleteComics(Array.from(selectedComicIds));
+                  setSelectedComicIds(new Set());
+                  setIsSelectMode(false);
+                }}
+              >
+                <Trash2 size={14} /> Удалить ({selectedComicIds.size})
+              </button>
+            </div>
+          )}
         </div>
       )}
 
