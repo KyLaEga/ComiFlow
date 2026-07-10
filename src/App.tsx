@@ -78,6 +78,7 @@ function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importTargetShelfId, setImportTargetShelfId] = useState<string | null>(null);
   
+  const [isSelectMode, setIsSelectMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
@@ -85,11 +86,22 @@ function App() {
   
   const libraryScrollYRef = useRef<number>(0);
 
-  // Keep a ref to activeComicId for the backButton listener
+  // Keep refs for the backButton listener to avoid re-binding it
   const activeComicIdRef = useRef<string | null>(null);
+  const isSettingsOpenRef = useRef<boolean>(false);
+  const isSelectModeRef = useRef<boolean>(false);
+
   useEffect(() => {
     activeComicIdRef.current = activeComicId;
   }, [activeComicId]);
+
+  useEffect(() => {
+    isSettingsOpenRef.current = isSettingsOpen;
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    isSelectModeRef.current = isSelectMode;
+  }, [isSelectMode]);
 
   // Handle hardware back button
   useEffect(() => {
@@ -109,8 +121,14 @@ function App() {
         if (bridge && typeof bridge.clearImportCache === 'function') {
           bridge.clearImportCache();
         }
+      } else if (isSettingsOpenRef.current) {
+        // If settings panel is open, close it
+        setIsSettingsOpen(false);
+      } else if (isSelectModeRef.current) {
+        // If items selection mode is active, exit select mode
+        setIsSelectMode(false);
       } else {
-        // If library is open, exit app
+        // Otherwise exit app
         CapacitorApp.exitApp();
       }
     }).then(sub => {
@@ -216,9 +234,11 @@ function App() {
   };
 
   // Sync SAF library
-  const syncLibrary = async (folderUri: string) => {
-    setIsImporting(true);
-    setImportProgress('Синхронизация библиотеки...');
+  const syncLibrary = async (folderUri: string, silent: boolean = false) => {
+    if (!silent) {
+      setIsImporting(true);
+      setImportProgress('Синхронизация библиотеки...');
+    }
     try {
       const bridge = (window as any).ComiFlowBridge;
       if (bridge && typeof bridge.listLibraryFiles === 'function') {
@@ -252,7 +272,7 @@ function App() {
                const shelfName = file.shelfName.trim();
                let existingShelf = currentShelves.find(s => s.name === shelfName);
                if (!existingShelf) {
-                 setImportProgress(`Создание полки "${shelfName}"...`);
+                 if (!silent) setImportProgress(`Создание полки "${shelfName}"...`);
                  const newShelfId = `shelf_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
                  existingShelf = await saveShelf(newShelfId, shelfName);
                  currentShelves.push(existingShelf);
@@ -261,14 +281,16 @@ function App() {
                targetShelfId = existingShelf.id;
              }
              if (typeof bridge.getComicMetadataNative === 'function') {
-               setImportProgress(`Анализ ${file.name}...`);
+               if (!silent) setImportProgress(`Анализ ${file.name}...`);
                const metaJson = bridge.getComicMetadataNative(file.uri);
                const metadata = JSON.parse(metaJson);
                
                if (metadata.error) {
                  console.error(`Failed to parse comic ${file.name} natively:`, metadata.error);
-                 setImportProgress(`Ошибка чтения: ${file.name}`);
-                 await new Promise(r => setTimeout(r, 1000));
+                 if (!silent) {
+                   setImportProgress(`Ошибка чтения: ${file.name}`);
+                   await new Promise(r => setTimeout(r, 1000));
+                 }
                  continue;
                }
                
@@ -282,7 +304,7 @@ function App() {
                await saveComic(id, title, file.size, pages, coverBlob, file.uri, metadata.format, targetShelfId);
                importedCount++;
              } else {
-               setImportProgress(`Чтение нового файла: ${file.name}...`);
+               if (!silent) setImportProgress(`Чтение нового файла: ${file.name}...`);
                // Copy to cache to parse (Legacy fallback)
                const nativePath = bridge.copyContentUriToCache(file.uri);
                if (nativePath) {
@@ -316,14 +338,16 @@ function App() {
       }
     } catch (err) {
       console.error(err);
-      alert('Ошибка при синхронизации папки библиотеки.');
+      if (!silent) alert('Ошибка при синхронизации папки библиотеки.');
     } finally {
       const bridge = (window as any).ComiFlowBridge;
       if (bridge && typeof bridge.clearImportCache === 'function') {
         bridge.clearImportCache();
       }
-      setIsImporting(false);
-      setImportProgress('');
+      if (!silent) {
+        setIsImporting(false);
+        setImportProgress('');
+      }
     }
   };
 
@@ -359,7 +383,7 @@ function App() {
         const uri = bridge.getLibraryFolderUri();
         if (uri) {
           setLibraryFolderUri(uri);
-          syncLibrary(uri);
+          syncLibrary(uri, true);
         }
       }
     }
@@ -777,6 +801,8 @@ function App() {
           activeShelfId={activeShelfId}
           setActiveShelfId={setActiveShelfId}
           onSyncLibrary={() => syncLibrary(libraryFolderUri)}
+          isSelectMode={isSelectMode}
+          setIsSelectMode={setIsSelectMode}
         />
       )}
 

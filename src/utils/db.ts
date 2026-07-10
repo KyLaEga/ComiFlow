@@ -71,7 +71,11 @@ export async function getAllComics(): Promise<ComicMetadata[]> {
   await metadataStore.iterate<ComicMetadata, void>((value) => {
     // Generate object URL for the cover blob so React can display it
     if (value.coverBlob) {
-      value.coverUrl = URL.createObjectURL(value.coverBlob);
+      try {
+        value.coverUrl = URL.createObjectURL(value.coverBlob);
+      } catch (err) {
+        console.error('Failed to create object URL for cover:', err);
+      }
     }
     comics.push(value);
   });

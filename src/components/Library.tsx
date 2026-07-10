@@ -20,6 +20,8 @@ interface LibraryProps {
   activeShelfId: string | null;
   setActiveShelfId: (id: string | null) => void;
   onSyncLibrary: () => void;
+  isSelectMode: boolean;
+  setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 export const Library: React.FC<LibraryProps> = ({
@@ -38,11 +40,12 @@ export const Library: React.FC<LibraryProps> = ({
   activeShelfId,
   setActiveShelfId,
   onSyncLibrary,
+  isSelectMode,
+  setIsSelectMode,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>('added');
   const [isDragActive, setIsDragActive] = useState(false);
-  const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -289,15 +292,15 @@ export const Library: React.FC<LibraryProps> = ({
 
       {/* Bulk Operations Action Bar */}
       {isSelectMode && (
-        <div className="library-controls" style={{ backgroundColor: 'var(--accent-light)', padding: '12px 16px', borderRadius: '16px', border: '1px solid var(--accent-border)', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--accent)' }}>
+        <div style={{ backgroundColor: 'var(--accent-light)', padding: '16px', borderRadius: '16px', border: '1px solid var(--accent-border)', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--accent)' }}>
               Выбрано файлов: {selectedComicIds.size}
             </span>
             <button
               type="button"
               className="shelf-tab-btn"
-              style={{ padding: '4px 8px', fontSize: '12px', backgroundColor: 'var(--bg-primary)' }}
+              style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--bg-primary)' }}
               onClick={() => {
                 if (selectedComicIds.size === sortedComics.length) {
                   setSelectedComicIds(new Set());
@@ -310,7 +313,7 @@ export const Library: React.FC<LibraryProps> = ({
             </button>
           </div>
           {selectedComicIds.size > 0 && (
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
               <select
                 className="card-shelf-select"
                 style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
