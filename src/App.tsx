@@ -326,14 +326,24 @@ function App() {
           }
         }
         
-        if (shelvesUpdated) {
+        // Clean up empty shelves
+        const finalComics = await getAllComics();
+        const usedShelfIds = new Set(finalComics.map(c => c.shelfId).filter(id => id));
+        let shelvesDeleted = false;
+        for (const shelf of currentShelves) {
+          if (!usedShelfIds.has(shelf.id)) {
+            await deleteShelf(shelf.id);
+            shelvesDeleted = true;
+          }
+        }
+
+        if (shelvesUpdated || shelvesDeleted) {
           const updatedShelvesList = await getAllShelves();
           setShelves(updatedShelvesList);
         }
         
         if (deletedCount > 0 || importedCount > 0) {
-          const list = await getAllComics();
-          setComics(list);
+          setComics(finalComics);
         }
       }
     } catch (err) {

@@ -313,10 +313,10 @@ export const Library: React.FC<LibraryProps> = ({
             </button>
           </div>
           {selectedComicIds.size > 0 && (
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
               <select
                 className="card-shelf-select"
-                style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
+                style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px', flexShrink: 0 }}
                 defaultValue=""
                 onChange={(e) => {
                   const val = e.target.value;
@@ -335,7 +335,7 @@ export const Library: React.FC<LibraryProps> = ({
               </select>
               <button
                 className="btn btn-danger"
-                style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px' }}
+                style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px', flexShrink: 0, whiteSpace: 'nowrap' }}
                 onClick={() => {
                   onBulkDeleteComics(Array.from(selectedComicIds));
                   setSelectedComicIds(new Set());
