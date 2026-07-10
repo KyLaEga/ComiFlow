@@ -19,6 +19,7 @@ interface LibraryProps {
   onBulkAssignComicsToShelf: (ids: string[], shelfId: string | null) => void;
   activeShelfId: string | null;
   setActiveShelfId: (id: string | null) => void;
+  onSyncLibrary: () => void;
 }
 
 export const Library: React.FC<LibraryProps> = ({
@@ -36,6 +37,7 @@ export const Library: React.FC<LibraryProps> = ({
   onBulkAssignComicsToShelf,
   activeShelfId,
   setActiveShelfId,
+  onSyncLibrary,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent'>('added');
@@ -228,6 +230,13 @@ export const Library: React.FC<LibraryProps> = ({
               }}
             >
               {isSelectMode ? 'Отмена' : 'Выбрать'}
+            </button>
+            <button
+              className="shelf-tab-btn"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              onClick={onSyncLibrary}
+            >
+              Синхронизировать
             </button>
             <select
               className="select-input"

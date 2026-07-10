@@ -32,6 +32,16 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
   return window.btoa(binary);
 };
 
+const base64ToBlob = (base64: string, mimeType: string): Blob => {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  return new Blob([byteArray], { type: mimeType });
+};
+
 const DEFAULT_SETTINGS: ReaderSettings = {
   theme: 'dark',
   direction: 'ltr',
@@ -250,23 +260,45 @@ function App() {
                }
                targetShelfId = existingShelf.id;
              }
-
-             setImportProgress(`Чтение нового файла: ${file.name}...`);
-             // Copy to cache to parse
-             const nativePath = bridge.copyContentUriToCache(file.uri);
-             if (nativePath) {
-               const capUrl = (window as any).Capacitor 
-                 ? (window as any).Capacitor.convertFileSrc(nativePath)
-                 : `http://localhost/_capacitor_file_${nativePath}`;
+             if (typeof bridge.getComicMetadataNative === 'function') {
+               setImportProgress(`Анализ ${file.name}...`);
+               const metaJson = bridge.getComicMetadataNative(file.uri);
+               const metadata = JSON.parse(metaJson);
                
-               const res = await fetch(capUrl);
-               if (res.ok) {
-                 const blob = await res.blob();
-                 const fObj = new File([blob], file.name, { type: blob.type });
-                 const lowerName = file.name.toLowerCase();
-                 const isPdf = lowerName.endsWith('.pdf');
-                 await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri, targetShelfId);
-                 importedCount++;
+               if (metadata.error) {
+                 console.error(`Failed to parse comic ${file.name} natively:`, metadata.error);
+                 setImportProgress(`Ошибка чтения: ${file.name}`);
+                 await new Promise(r => setTimeout(r, 1000));
+                 continue;
+               }
+               
+               const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
+               const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+               const pages = metadata.format === 'pdf'
+                 ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
+                 : metadata.pages;
+               
+               const title = file.name.replace(/\.[^/.]+$/, "");
+               await saveComic(id, title, file.size, pages, coverBlob, file.uri, metadata.format, targetShelfId);
+               importedCount++;
+             } else {
+               setImportProgress(`Чтение нового файла: ${file.name}...`);
+               // Copy to cache to parse (Legacy fallback)
+               const nativePath = bridge.copyContentUriToCache(file.uri);
+               if (nativePath) {
+                 const capUrl = (window as any).Capacitor 
+                   ? (window as any).Capacitor.convertFileSrc(nativePath)
+                   : `http://localhost/_capacitor_file_${nativePath}`;
+                 
+                 const res = await fetch(capUrl);
+                 if (res.ok) {
+                   const blob = await res.blob();
+                   const fObj = new File([blob], file.name, { type: blob.type });
+                   const lowerName = file.name.toLowerCase();
+                   const isPdf = lowerName.endsWith('.pdf');
+                   await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri, targetShelfId);
+                   importedCount++;
+                 }
                }
              }
           }
@@ -398,7 +430,27 @@ function App() {
 
   // Apply Theme Attribute to HTML Element
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.theme);
+    const applyTheme = () => {
+      let resolvedTheme = settings.theme;
+      if (settings.theme === 'system') {
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        resolvedTheme = isDark ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', resolvedTheme);
+    };
+
+    applyTheme();
+
+    if (settings.theme === 'system') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const listener = (e: MediaQueryListEvent) => {
+        document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+      };
+      mediaQuery.addEventListener('change', listener);
+      return () => {
+        mediaQuery.removeEventListener('change', listener);
+      };
+    }
   }, [settings.theme]);
 
   // Update Settings
@@ -724,6 +776,7 @@ function App() {
           onBulkAssignComicsToShelf={handleBulkAssignComicsToShelf}
           activeShelfId={activeShelfId}
           setActiveShelfId={setActiveShelfId}
+          onSyncLibrary={() => syncLibrary(libraryFolderUri)}
         />
       )}
 

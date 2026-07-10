@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2 } from 'lucide-react';
 
 export interface ReaderSettings {
-  theme: 'light' | 'dark' | 'oled';
+  theme: 'light' | 'dark' | 'oled' | 'system';
   direction: 'ltr' | 'rtl';
   mode: 'paged' | 'webtoon';
   fitMode: 'contain' | 'width' | 'height';
@@ -134,6 +134,12 @@ export const Settings: React.FC<SettingsProps> = ({
               onClick={() => onUpdateSettings({ theme: 'oled' })}
             >
               OLED
+            </button>
+            <button
+              className={`segmented-btn ${settings.theme === 'system' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ theme: 'system' })}
+            >
+              Авто
             </button>
           </div>
         </div>

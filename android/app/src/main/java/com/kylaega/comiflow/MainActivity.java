@@ -13,6 +13,18 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import android.app.Activity;
 import androidx.documentfile.provider.DocumentFile;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.pdf.PdfRenderer;
+import android.os.ParcelFileDescriptor;
+import android.util.Base64;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipEntry;
+import java.util.Collections;
+import java.util.ArrayList;
+import java.util.Comparator;
 
 public class MainActivity extends BridgeActivity {
     private boolean volumeKeysEnabled = false;
@@ -210,6 +222,173 @@ public class MainActivity extends BridgeActivity {
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
+            }
+
+            private boolean isImageFile(String filename) {
+                String lower = filename.toLowerCase();
+                if (lower.startsWith(".") || lower.contains("__macosx") || lower.contains("thumbs.db") || lower.endsWith("/")) {
+                    return false;
+                }
+                return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || 
+                       lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".bmp") || lower.endsWith(".avif");
+            }
+
+            @JavascriptInterface
+            public String getComicMetadataNative(String uriString) {
+                JSONObject result = new JSONObject();
+                try {
+                    Uri uri = Uri.parse(uriString);
+                    String fileName = "temp_comic";
+                    Cursor cursor = MainActivity.this.getContentResolver().query(uri, null, null, null, null);
+                    if (cursor != null) {
+                        int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                        if (nameIndex != -1 && cursor.moveToFirst()) {
+                            fileName = cursor.getString(nameIndex);
+                        }
+                        cursor.close();
+                    }
+
+                    String lowerName = fileName.toLowerCase();
+                    if (lowerName.endsWith(".pdf")) {
+                        // PDF Parsing
+                        ParcelFileDescriptor pfd = MainActivity.this.getContentResolver().openFileDescriptor(uri, "r");
+                        if (pfd == null) throw new Exception("Failed to open file descriptor");
+                        PdfRenderer renderer = new PdfRenderer(pfd);
+                        int pageCount = renderer.getPageCount();
+                        
+                        String coverBase64 = "";
+                        if (pageCount > 0) {
+                            PdfRenderer.Page page = renderer.openPage(0);
+                            int width = page.getWidth();
+                            int height = page.getHeight();
+                            int maxDimension = 640;
+                            if (width > height) {
+                                if (width > maxDimension) {
+                                    height = (int) (((double) height * maxDimension) / width);
+                                    width = maxDimension;
+                                }
+                            } else {
+                                if (height > maxDimension) {
+                                    width = (int) (((double) width * maxDimension) / height);
+                                    height = maxDimension;
+                                }
+                            }
+                            
+                            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                            
+                            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos);
+                            coverBase64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                            
+                            bitmap.recycle();
+                            page.close();
+                        }
+                        renderer.close();
+                        pfd.close();
+
+                        result.put("format", "pdf");
+                        result.put("totalPages", pageCount);
+                        result.put("coverBase64", coverBase64);
+                    } else {
+                        // CBZ/ZIP Parsing
+                        ZipInputStream zis = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
+                        ZipEntry ze;
+                        ArrayList<String> pages = new ArrayList<>();
+                        byte[] tempCoverBytes = null;
+                        String firstImagePath = null;
+
+                        while ((ze = zis.getNextEntry()) != null) {
+                            String name = ze.getName();
+                            if (!ze.isDirectory() && isImageFile(name)) {
+                                pages.add(name);
+                                if (firstImagePath == null || name.compareToIgnoreCase(firstImagePath) < 0) {
+                                    firstImagePath = name;
+                                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                    byte[] buffer = new byte[8192];
+                                    int len;
+                                    while ((len = zis.read(buffer)) != -1) {
+                                        baos.write(buffer, 0, len);
+                                    }
+                                    tempCoverBytes = baos.toByteArray();
+                                }
+                            }
+                            zis.closeEntry();
+                        }
+                        zis.close();
+
+                        // Sort pages alphabetically
+                        Collections.sort(pages, new Comparator<String>() {
+                            @Override
+                            public int compare(String s1, String s2) {
+                                return s1.compareToIgnoreCase(s2);
+                            }
+                        });
+
+                        String coverBase64 = "";
+                        if (tempCoverBytes != null) {
+                            BitmapFactory.Options options = new BitmapFactory.Options();
+                            options.inJustDecodeBounds = true;
+                            BitmapFactory.decodeByteArray(tempCoverBytes, 0, tempCoverBytes.length, options);
+                            
+                            int width = options.outWidth;
+                            int height = options.outHeight;
+                            int maxDimension = 640;
+                            
+                            int inSampleSize = 1;
+                            if (width > maxDimension || height > maxDimension) {
+                                final int halfHeight = height / 2;
+                                final int halfWidth = width / 2;
+                                while ((halfHeight / inSampleSize) >= maxDimension && (halfWidth / inSampleSize) >= maxDimension) {
+                                    inSampleSize *= 2;
+                                }
+                            }
+                            
+                            options.inJustDecodeBounds = false;
+                            options.inSampleSize = inSampleSize;
+                            Bitmap bitmap = BitmapFactory.decodeByteArray(tempCoverBytes, 0, tempCoverBytes.length, options);
+                            
+                            if (bitmap != null) {
+                                int targetWidth = bitmap.getWidth();
+                                int targetHeight = bitmap.getHeight();
+                                if (targetWidth > maxDimension || targetHeight > maxDimension) {
+                                    if (targetWidth > targetHeight) {
+                                        targetHeight = (int) (((double) targetHeight * maxDimension) / targetWidth);
+                                        targetWidth = maxDimension;
+                                    } else {
+                                        targetWidth = (int) (((double) targetWidth * maxDimension) / targetHeight);
+                                        targetHeight = maxDimension;
+                                    }
+                                    Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true);
+                                    if (scaledBitmap != bitmap) {
+                                        bitmap.recycle();
+                                        bitmap = scaledBitmap;
+                                    }
+                                }
+                                
+                                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, baos);
+                                coverBase64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                                bitmap.recycle();
+                            }
+                        }
+
+                        JSONArray pagesArray = new JSONArray();
+                        for (String page : pages) {
+                            pagesArray.put(page);
+                        }
+
+                        result.put("format", "cbz");
+                        result.put("pages", pagesArray);
+                        result.put("coverBase64", coverBase64);
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    try {
+                        result.put("error", e.getMessage());
+                    } catch (Exception ignored) {}
+                }
+                return result.toString();
             }
 
             @JavascriptInterface
