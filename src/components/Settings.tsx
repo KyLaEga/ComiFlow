@@ -85,7 +85,13 @@ export const Settings: React.FC<SettingsProps> = ({
             <div style={{ padding: '12px', marginBottom: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Выбранная папка:</div>
               <div style={{ fontSize: '14px', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-                {decodeURIComponent(libraryFolderUri).split('/').pop()}
+                {(() => {
+                  try {
+                    return decodeURIComponent(libraryFolderUri).split('/').pop();
+                  } catch (e) {
+                    return libraryFolderUri.split('/').pop() || libraryFolderUri;
+                  }
+                })()}
               </div>
             </div>
           )}

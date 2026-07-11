@@ -17,6 +17,183 @@ interface ReaderProps {
   onSelectComic: (id: string) => void;
 }
 
+interface DynamicCoverImageProps {
+  coverBlob: Blob | null;
+  title: string;
+  className?: string;
+  fallbackClassName?: string;
+}
+
+const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, title, className, fallbackClassName }) => {
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (coverBlob) {
+      let url = '';
+      try {
+        url = URL.createObjectURL(coverBlob);
+        setCoverUrl(url);
+      } catch (err) {
+        console.error('Failed to create object URL:', err);
+      }
+      return () => {
+        if (url) URL.revokeObjectURL(url);
+      };
+    }
+  }, [coverBlob]);
+
+  if (coverUrl) {
+    return <img src={coverUrl} alt={title} className={className} />;
+  }
+
+  return (
+    <div className={fallbackClassName} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', backgroundColor: 'var(--bg-tertiary)' }}>
+      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Нет</span>
+    </div>
+  );
+};
+
+interface DrawerComicCardProps {
+  c: ComicMetadata;
+  isActive: boolean;
+  onClick: () => void;
+}
+
+const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick }) => {
+  const progressPercent = c.totalPages > 0 
+    ? Math.round((c.currentPage / (c.totalPages - 1 || 1)) * 100) 
+    : 0;
+
+  const isCompleted = progressPercent >= 95;
+  const isUnread = c.currentPage === 0 && !c.lastReadAt;
+
+  return (
+    <div
+      className={`drawer-comic-card ${isActive ? 'active' : ''}`}
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        minWidth: '105px',
+        maxWidth: '105px',
+        cursor: 'pointer',
+        textAlign: 'left',
+        position: 'relative'
+      }}
+    >
+      <div 
+        className="drawer-cover-wrapper" 
+        style={{ 
+          position: 'relative',
+          width: '100%',
+          aspectRatio: '2 / 3',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          backgroundColor: 'rgba(255, 255, 255, 0.05)',
+          border: isActive ? '2px solid var(--accent)' : '1px solid var(--border-color)',
+          boxShadow: isActive ? '0 0 15px var(--accent-border)' : '0 4px 12px rgba(0,0,0,0.15)',
+          transition: 'all 0.2s ease',
+          flexShrink: 0
+        }}
+      >
+        <DynamicCoverImage 
+          coverBlob={c.coverBlob} 
+          title={c.title} 
+          className="drawer-cover" 
+          fallbackClassName="drawer-cover-placeholder" 
+        />
+        
+        {progressPercent > 0 && (
+          <div 
+            style={{ 
+              position: 'absolute', 
+              bottom: 0, 
+              left: 0, 
+              right: 0,
+              height: '4px',
+              backgroundColor: 'rgba(0, 0, 0, 0.4)'
+            }} 
+          >
+            <div
+              style={{
+                height: '100%',
+                backgroundColor: isCompleted ? '#4caf50' : 'var(--accent)', 
+                width: `${Math.min(100, progressPercent)}%` 
+              }}
+            />
+          </div>
+        )}
+
+        <div style={{
+          position: 'absolute',
+          top: '6px',
+          right: '6px',
+          zIndex: 5,
+        }}>
+          {isCompleted ? (
+            <span style={{
+              backgroundColor: '#4caf50',
+              color: '#ffffff',
+              fontSize: '9px',
+              fontWeight: 'bold',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+            }}>✓</span>
+          ) : isUnread ? (
+            <span style={{
+              backgroundColor: '#aa3bff',
+              color: '#ffffff',
+              fontSize: '9px',
+              fontWeight: 'bold',
+              padding: '2px 6px',
+              borderRadius: '4px',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+            }}>Новый</span>
+          ) : (
+            <span style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.75)',
+              color: '#ffffff',
+              fontSize: '9px',
+              fontWeight: '600',
+              padding: '2px 5px',
+              borderRadius: '4px',
+              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+            }}>{progressPercent}%</span>
+          )}
+        </div>
+      </div>
+      
+      <div className="drawer-comic-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
+        <span 
+          className="drawer-comic-title" 
+          style={{ 
+            fontWeight: isActive ? '600' : '500', 
+            fontSize: '12px', 
+            lineHeight: '1.25',
+            maxHeight: '2.5em',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            color: isActive ? 'var(--accent)' : 'var(--text-primary)',
+            textOverflow: 'ellipsis'
+          }}
+          title={c.title}
+        >
+          {c.title}
+        </span>
+        {c.totalPages > 0 && !isCompleted && !isUnread && (
+          <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+            стр. {c.currentPage + 1}/{c.totalPages}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const Reader: React.FC<ReaderProps> = ({
   comic,
   fileBlob,
@@ -34,8 +211,40 @@ export const Reader: React.FC<ReaderProps> = ({
   const [isLoadingPage, setIsLoadingPage] = useState(false);
   const [isHudActive, setIsHudActive] = useState(true);
   
-  // Find next comic on this shelf
-  const sortedShelfComics = [...shelfComics].sort((a, b) => a.title.localeCompare(b.title));
+  type DrawerSortType = 'alphabetical' | 'alphabetical-desc' | 'progress-asc' | 'progress-desc' | 'added-new' | 'added-old';
+  const [drawerSort, setDrawerSort] = useState<DrawerSortType>(() => {
+    return (localStorage.getItem('comiflow_drawer_sort') as DrawerSortType) || 'alphabetical';
+  });
+
+  const getSortedShelfComics = () => {
+    const list = [...shelfComics];
+    switch (drawerSort) {
+      case 'alphabetical':
+        return list.sort((a, b) => a.title.localeCompare(b.title));
+      case 'alphabetical-desc':
+        return list.sort((a, b) => b.title.localeCompare(a.title));
+      case 'progress-asc':
+        return list.sort((a, b) => {
+          const progressA = a.totalPages > 0 ? a.currentPage / a.totalPages : 0;
+          const progressB = b.totalPages > 0 ? b.currentPage / b.totalPages : 0;
+          return progressA - progressB;
+        });
+      case 'progress-desc':
+        return list.sort((a, b) => {
+          const progressA = a.totalPages > 0 ? a.currentPage / a.totalPages : 0;
+          const progressB = b.totalPages > 0 ? b.currentPage / b.totalPages : 0;
+          return progressB - progressA;
+        });
+      case 'added-new':
+        return list.sort((a, b) => b.addedAt - a.addedAt);
+      case 'added-old':
+        return list.sort((a, b) => a.addedAt - b.addedAt);
+      default:
+        return list;
+    }
+  };
+
+  const sortedShelfComics = getSortedShelfComics();
   const currentIdx = sortedShelfComics.findIndex((c) => c.id === comic.id);
   const nextComic = currentIdx !== -1 && currentIdx < sortedShelfComics.length - 1 ? sortedShelfComics[currentIdx + 1] : null;
 
@@ -556,36 +765,53 @@ export const Reader: React.FC<ReaderProps> = ({
       {/* Shelf issues bottom sheet drawer */}
       {shelfComics.length > 1 && (
         <div className={`reader-drawer-overlay ${isDrawerOpen ? 'active' : ''}`} onClick={() => setIsDrawerOpen(false)}>
-          <div className="reader-drawer" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-header">
-              <span className="drawer-title">Выпуски на полке</span>
-              <button className="btn-icon" onClick={() => setIsDrawerOpen(false)} aria-label="Закрыть">
-                <X size={20} />
-              </button>
+          <div className="reader-drawer" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="drawer-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid var(--border-color)', gap: '12px' }}>
+              <span className="drawer-title" style={{ fontSize: '18px', fontWeight: 'bold' }}>Выпуски на полке ({shelfComics.length})</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <select
+                  value={drawerSort}
+                  onChange={(e) => {
+                    const val = e.target.value as DrawerSortType;
+                    setDrawerSort(val);
+                    localStorage.setItem('comiflow_drawer_sort', val);
+                  }}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: '8px',
+                    backgroundColor: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: '13px',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="alphabetical">А-Я (по названию)</option>
+                  <option value="alphabetical-desc">Я-А (по названию)</option>
+                  <option value="added-new">Сначала новые (по дате)</option>
+                  <option value="added-old">Сначала старые (по дате)</option>
+                  <option value="progress-asc">Сначала непрочитанные</option>
+                  <option value="progress-desc">Сначала прочитанные</option>
+                </select>
+                <button className="btn-icon" onClick={() => setIsDrawerOpen(false)} aria-label="Закрыть">
+                  <X size={20} />
+                </button>
+              </div>
             </div>
-            <div className="drawer-comic-list">
-              {shelfComics.map((c) => (
-                <div
+            <div className="drawer-comic-list" style={{ flex: 1, overflowX: 'auto', padding: '16px 8px', display: 'flex', gap: '16px', scrollbarWidth: 'thin' }}>
+              {sortedShelfComics.map((c) => (
+                <DrawerComicCard
                   key={c.id}
-                  className={`drawer-comic-card ${c.id === comic.id ? 'active' : ''}`}
+                  c={c}
+                  isActive={c.id === comic.id}
                   onClick={() => {
                     if (c.id !== comic.id) {
                       onSelectComic(c.id);
                       setIsDrawerOpen(false);
                     }
                   }}
-                >
-                  <div className="drawer-cover-wrapper">
-                    {c.coverUrl && (
-                      <img
-                        src={c.coverUrl}
-                        alt={c.title}
-                        className="drawer-cover"
-                      />
-                    )}
-                  </div>
-                  <span className="drawer-comic-title">{c.title}</span>
-                </div>
+                />
               ))}
             </div>
           </div>
@@ -597,9 +823,7 @@ export const Reader: React.FC<ReaderProps> = ({
         <div className="next-issue-overlay">
           <div className="next-issue-card">
             <span className="next-issue-badge">Выпуск прочитан!</span>
-            {nextComic.coverUrl && (
-              <img src={nextComic.coverUrl} alt={nextComic.title} className="next-issue-cover" />
-            )}
+            <DynamicCoverImage coverBlob={nextComic.coverBlob} title={nextComic.title} className="next-issue-cover" fallbackClassName="next-issue-cover-placeholder" />
             <h4 className="next-issue-title">Открыть следующий выпуск?</h4>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>{nextComic.title}</p>
             <div className="next-issue-actions">
