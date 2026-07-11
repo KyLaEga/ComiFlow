@@ -12,7 +12,7 @@ export interface ComicMetadata {
   totalPages: number;
   pages: string[]; // List of file names inside the zip (sorted)
   coverUrl?: string; // Temporarily created Object URL for rendering
-  coverBlob: Blob; // Saved Blob of the first page
+  coverBlob: Blob | null; // Saved Blob of the first page
   format?: 'cbz' | 'pdf'; // File format
   uri: string; // Native SAF URI pointing to the file
   shelfId?: string | null; // Shelf ID this comic belongs to
@@ -83,13 +83,13 @@ export async function saveComic(
   title: string,
   size: number,
   pages: string[],
-  coverBlob: Blob,
+  coverBlob: Blob | null,
   uri: string,
   format: 'cbz' | 'pdf',
   shelfId: string | null = null
 ): Promise<ComicMetadata> {
   // Compress and resize the cover image to prevent DB storage bloat
-  const compressedCover = await resizeCover(coverBlob);
+  const compressedCover = coverBlob ? await resizeCover(coverBlob) : null;
 
   const metadata: ComicMetadata = {
     id,

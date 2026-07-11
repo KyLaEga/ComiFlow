@@ -1,0 +1,16 @@
+/* --- TYPOGRAPHY & FONT SCALES --- */
+:root {
+  --font-ui: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  
+  /* Standard typographical scale */
+  --fs-2xs: 0.65rem;   /* counters, small badges */
+  --fs-xs:  0.72rem;   /* captions, secondary labels */
+  --fs-sm:  0.8rem;    /* secondary text, table cells */
+  --fs-base: 0.85rem;  /* body text and default controls */
+  --fs-md:  0.95rem;   /* accented text, active menu items */
+  --fs-lg:  1.05rem;   /* section headers */
+  --fs-xl:  1.35rem;   /* large titles / logo */
+  --fs-2xl: 2.25rem;   /* empty state title */
+  --fs-3xl: 4rem;      /* decorative hero icons */
+}

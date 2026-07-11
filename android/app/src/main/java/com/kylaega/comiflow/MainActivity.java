@@ -343,7 +343,7 @@ public class MainActivity extends BridgeActivity {
                             
                             // Pass 1: Scan headers only to collect names and determine alphabetical cover entry
                             String targetCoverPath = null;
-                            ZipInputStream zis = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
+                            ZipInputStream zis = new ZipInputStream(new java.io.BufferedInputStream(MainActivity.this.getContentResolver().openInputStream(uri), 65536));
                             ZipEntry ze;
                             while ((ze = zis.getNextEntry()) != null) {
                                 String name = ze.getName();
@@ -359,7 +359,7 @@ public class MainActivity extends BridgeActivity {
                             
                             // Pass 2: Extract only the target cover
                             if (targetCoverPath != null) {
-                                ZipInputStream zis2 = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
+                                ZipInputStream zis2 = new ZipInputStream(new java.io.BufferedInputStream(MainActivity.this.getContentResolver().openInputStream(uri), 65536));
                                 while ((ze = zis2.getNextEntry()) != null) {
                                     if (ze.getName().equals(targetCoverPath)) {
                                         ByteArrayOutputStream baos = new ByteArrayOutputStream();

@@ -75,6 +75,7 @@ function App() {
   
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState('');
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   
   const [pendingFiles, setPendingFiles] = useState<FileList | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -288,28 +289,13 @@ function App() {
                targetShelfId = existingShelf.id;
              }
              if (typeof bridge.getComicMetadataNative === 'function') {
-               if (!silent) setImportProgress(`Анализ ${file.name}...`);
-               const metaJson = bridge.getComicMetadataNative(file.uri);
-               const metadata = JSON.parse(metaJson);
-               
-               if (metadata.error) {
-                 console.error(`Failed to parse comic ${file.name} natively:`, metadata.error);
-                 if (!silent) {
-                   setImportProgress(`Ошибка чтения: ${file.name}`);
-                   await new Promise(r => setTimeout(r, 1000));
-                 }
-                 continue;
-               }
-               
-               const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
-               const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-               const pages = metadata.format === 'pdf'
-                 ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
-                 : metadata.pages;
-               
-               const title = file.name.replace(/\.[^/.]+$/, "");
-               await saveComic(id, title, file.size, pages, coverBlob, file.uri, metadata.format, targetShelfId);
-               importedCount++;
+                if (!silent) setImportProgress(`Добавление ${file.name}...`);
+                const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+                const isPdf = file.name.toLowerCase().endsWith('.pdf');
+                const format = isPdf ? 'pdf' : 'cbz';
+                const title = file.name.replace(/\.[^/.]+$/, "");
+                await saveComic(id, title, file.size, [], null, file.uri, format, targetShelfId);
+                importedCount++;
              } else {
                if (!silent) setImportProgress(`Чтение нового файла: ${file.name}...`);
                // Copy to cache to parse (Legacy fallback)
@@ -507,6 +493,44 @@ function App() {
     });
   }, []);
 
+  // Background metadata loader worker
+  useEffect(() => {
+    if (isImporting || isProcessingQueue) return;
+
+    const runQueue = async () => {
+      // Find one comic without metadata (empty pages)
+      const pending = comics.find((c) => !c.pages || c.pages.length === 0);
+      if (!pending) return;
+
+      setIsProcessingQueue(true);
+      try {
+        const bridge = (window as any).ComiFlowBridge;
+        if (bridge && typeof bridge.getComicMetadataNative === 'function') {
+          const metaJson = bridge.getComicMetadataNative(pending.uri);
+          const metadata = JSON.parse(metaJson);
+          if (!metadata.error) {
+            const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
+            const pages = metadata.format === 'pdf'
+              ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
+              : metadata.pages;
+            
+            await saveComic(pending.id, pending.title, pending.size, pages, coverBlob, pending.uri, metadata.format, pending.shelfId || null);
+            
+            const updatedList = await getAllComics();
+            setComics(updatedList);
+          }
+        }
+      } catch (err) {
+        console.error('Queue processing error:', err);
+      } finally {
+        setIsProcessingQueue(false);
+      }
+    };
+
+    const timer = setTimeout(runQueue, 1500); // 1.5s delay to keep UI snappy
+    return () => clearTimeout(timer);
+  }, [comics, isImporting, isProcessingQueue]);
+
   // Start the import flow by opening the target shelf selector modal
   const handleStartImportFlow = (files: FileList) => {
     setPendingFiles(files);
@@ -585,8 +609,30 @@ function App() {
     setIsImporting(true);
     setImportProgress('Загрузка комикса из памяти устройства...');
     try {
-      const comic = comics.find((c) => c.id === id);
+      let comic = comics.find((c) => c.id === id);
       if (!comic) throw new Error('Комикс не найден.');
+
+      // Lazy load metadata if it was not processed yet
+      if (!comic.pages || comic.pages.length === 0) {
+        setImportProgress('Анализ комикса...');
+        const bridge = (window as any).ComiFlowBridge;
+        if (bridge && typeof bridge.getComicMetadataNative === 'function') {
+          const metaJson = bridge.getComicMetadataNative(comic.uri);
+          const metadata = JSON.parse(metaJson);
+          if (metadata.error) throw new Error(metadata.error);
+
+          const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
+          const pages = metadata.format === 'pdf'
+            ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
+            : metadata.pages;
+
+          comic = await saveComic(comic.id, comic.title, comic.size, pages, coverBlob, comic.uri, metadata.format, comic.shelfId || null);
+          
+          // Refresh state list
+          const list = await getAllComics();
+          setComics(list);
+        }
+      }
       
       const capUrl = (window as any).Capacitor 
         ? (window as any).Capacitor.convertFileSrc(comic.uri)
@@ -688,12 +734,28 @@ function App() {
     return id;
   };
 
-  // Delete shelf (comics remain intact but lose reference)
+  // Delete shelf and optionally its comics
   const handleDeleteShelf = async (id: string) => {
+    try {
+      const bridge = (window as any).ComiFlowBridge;
+      const shelfComics = comics.filter((c) => c.shelfId === id);
+      
+      for (const comic of shelfComics) {
+        if (comic.coverUrl) URL.revokeObjectURL(comic.coverUrl);
+        await deleteComic(comic.id);
+        
+        if (settings.deletePhysicalFile && bridge && typeof bridge.deleteSAFFile === 'function') {
+          bridge.deleteSAFFile(comic.uri);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to delete comics for shelf:', e);
+    }
+    
     await deleteShelf(id);
     const sList = await getAllShelves();
     setShelves(sList);
-    // Refresh comics listing since shelfIds were set to null
+    // Refresh comics listing
     const cList = await getAllComics();
     setComics(cList);
   };
@@ -827,6 +889,7 @@ function App() {
           onSyncLibrary={() => syncLibrary(libraryFolderUri)}
           isSelectMode={isSelectMode}
           setIsSelectMode={setIsSelectMode}
+          initialScrollTop={libraryScrollYRef.current}
         />
       )}
 
@@ -856,6 +919,7 @@ function App() {
             onUpdateSettings={handleUpdateSettings}
             onClearLibrary={handleClearLibrary}
             onChangeLibraryFolder={selectLibraryFolder}
+            onSyncLibrary={() => libraryFolderUri && syncLibrary(libraryFolderUri)}
             libraryFolderUri={libraryFolderUri}
           />
         </Suspense>

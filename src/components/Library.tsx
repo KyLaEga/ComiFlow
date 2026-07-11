@@ -22,6 +22,7 @@ interface LibraryProps {
   onSyncLibrary: () => void;
   isSelectMode: boolean;
   setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
+  initialScrollTop?: number;
 }
 
 interface ComicCardProps {
@@ -194,6 +195,7 @@ export const Library: React.FC<LibraryProps> = ({
   onSyncLibrary,
   isSelectMode,
   setIsSelectMode,
+  initialScrollTop,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>(() => {
@@ -210,6 +212,19 @@ export const Library: React.FC<LibraryProps> = ({
   useEffect(() => {
     localStorage.setItem('comiflow_filter_status', filterStatus);
   }, [filterStatus]);
+
+  // Restore scroll position
+  useEffect(() => {
+    if (initialScrollTop) {
+      const timer = setTimeout(() => {
+        window.scrollTo({
+          top: initialScrollTop,
+          behavior: 'instant' as any
+        });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [initialScrollTop]);
 
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());

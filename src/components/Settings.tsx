@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2 } from 'lucide-react';
 
 export interface ReaderSettings {
-  theme: 'light' | 'dark' | 'oled' | 'system';
+  theme: 'light' | 'dark' | 'dracula' | 'nord' | 'tokyo' | 'oled-black' | 'oled-dracula' | 'oled-tokyo' | 'oled-one-dark' | 'oled-evergreen' | 'one-dark' | 'system';
   direction: 'ltr' | 'rtl';
   mode: 'paged' | 'webtoon';
   fitMode: 'contain' | 'width' | 'height';
@@ -21,6 +21,7 @@ interface SettingsProps {
   onUpdateSettings: (newSettings: Partial<ReaderSettings>) => void;
   onClearLibrary: () => void;
   onChangeLibraryFolder: () => void;
+  onSyncLibrary: () => void;
   libraryFolderUri: string | null;
 }
 
@@ -31,13 +32,21 @@ export const Settings: React.FC<SettingsProps> = ({
   onUpdateSettings,
   onClearLibrary,
   onChangeLibraryFolder,
+  onSyncLibrary,
   libraryFolderUri,
 }) => {
   const [storageUsage, setStorageUsage] = useState<string>('');
 
   useEffect(() => {
-    if (isOpen && navigator.storage && navigator.storage.estimate) {
-      navigator.storage.estimate().then((estimate) => {
+    if (isOpen) {
+      updateStorageUsage();
+    }
+  }, [isOpen]);
+
+  const updateStorageUsage = async () => {
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
         const usage = estimate.usage || 0;
         const quota = estimate.quota || 0;
         
@@ -50,17 +59,17 @@ export const Settings: React.FC<SettingsProps> = ({
         };
         
         setStorageUsage(`Хранилище: ${formatSize(usage)} из ${formatSize(quota)}`);
-      }).catch(err => {
-        console.warn('Failed to fetch storage estimate:', err);
-      });
+      }
+    } catch (e) {
+      console.warn('Failed to get storage estimate', e);
     }
-  }, [isOpen]);
+  };
+
+  if (!isOpen) return null;
 
   return (
-    <div className={`settings-overlay ${isOpen ? 'active' : ''}`}>
-      <div className="settings-backdrop" onClick={onClose} />
-      
-      <div className="settings-panel">
+    <div className="settings-overlay" onClick={onClose}>
+      <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
         <div className="settings-header">
           <h3 className="settings-title">Настройки</h3>
           <button className="btn-icon" onClick={onClose} aria-label="Закрыть">
@@ -82,6 +91,19 @@ export const Settings: React.FC<SettingsProps> = ({
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {libraryFolderUri && (
+              <button
+                onClick={() => {
+                  onSyncLibrary();
+                  onClose();
+                }}
+                className="btn"
+                style={{ width: '100%', justifyContent: 'center', backgroundColor: 'var(--accent)', color: '#fff' }}
+              >
+                Синхронизировать библиотеку
+              </button>
+            )}
+
             <button
               onClick={() => {
                 onChangeLibraryFolder();
@@ -117,32 +139,34 @@ export const Settings: React.FC<SettingsProps> = ({
         {/* Theme Settings */}
         <div className="settings-section">
           <span className="settings-section-title">Тема оформления</span>
-          <div className="segmented-control">
-            <button
-              className={`segmented-btn ${settings.theme === 'light' ? 'active' : ''}`}
-              onClick={() => onUpdateSettings({ theme: 'light' })}
-            >
-              Светлая
-            </button>
-            <button
-              className={`segmented-btn ${settings.theme === 'dark' ? 'active' : ''}`}
-              onClick={() => onUpdateSettings({ theme: 'dark' })}
-            >
-              Темная
-            </button>
-            <button
-              className={`segmented-btn ${settings.theme === 'oled' ? 'active' : ''}`}
-              onClick={() => onUpdateSettings({ theme: 'oled' })}
-            >
-              OLED
-            </button>
-            <button
-              className={`segmented-btn ${settings.theme === 'system' ? 'active' : ''}`}
-              onClick={() => onUpdateSettings({ theme: 'system' })}
-            >
-              Авто
-            </button>
-          </div>
+          <select
+            value={settings.theme}
+            onChange={(e) => onUpdateSettings({ theme: e.target.value as any })}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: '8px',
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              outline: 'none',
+              fontSize: '14px',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="system">Авто (Системная)</option>
+            <option value="light">Светлая</option>
+            <option value="dark">Темная</option>
+            <option value="dracula">Dracula</option>
+            <option value="nord">Nord</option>
+            <option value="tokyo">Tokyo</option>
+            <option value="one-dark">One Dark</option>
+            <option value="oled-black">OLED Black</option>
+            <option value="oled-dracula">OLED Dracula</option>
+            <option value="oled-tokyo">OLED Tokyo</option>
+            <option value="oled-one-dark">OLED One Dark</option>
+            <option value="oled-evergreen">OLED Evergreen</option>
+          </select>
         </div>
 
         {/* Reading Direction */}

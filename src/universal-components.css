@@ -1,0 +1,78 @@
+/* --- UNIVERSAL COMPONENT STYLES --- */
+
+/* Custom Range Sliders with full-height hitboxes and mathematically perfect centering */
+input[type="range"] {
+  accent-color: var(--text-primary);
+  cursor: pointer;
+  -webkit-appearance: none;
+  background: transparent;
+  height: 100% !important; /* Stretch to fill container height (e.g. 48px/44px) for maximum clickable hit area */
+  width: 100%;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box;
+}
+
+input[type="range"]:focus {
+  outline: none;
+}
+
+/* Webkit / Safari Track */
+input[type="range"]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(128, 128, 128, 0.4) !important; /* Neutral grey visible in all themes */
+  border-radius: 2px;
+  border: none;
+  margin-top: 0 !important;
+}
+
+/* Webkit / Safari Thumb */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  /* Center the 14px thumb on the 4px track: (4 / 2) - (14 / 2) = -5px */
+  margin-top: -5px; 
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* Mozilla Firefox Track */
+input[type="range"]::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(128, 128, 128, 0.4) !important;
+  border-radius: 2px;
+  border: none;
+}
+
+/* Mozilla Firefox Thumb */
+input[type="range"]::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s ease, background-color 0.1s ease;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type="range"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
