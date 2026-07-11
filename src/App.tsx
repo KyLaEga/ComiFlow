@@ -588,32 +588,22 @@ function App() {
       const comic = comics.find((c) => c.id === id);
       if (!comic) throw new Error('Комикс не найден.');
       
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.copyContentUriToCache === 'function') {
-        const nativePath = bridge.copyContentUriToCache(comic.uri);
-        if (nativePath) {
-           const capUrl = (window as any).Capacitor 
-             ? (window as any).Capacitor.convertFileSrc(nativePath)
-             : `http://localhost/_capacitor_file_${nativePath}`;
-             
-           const res = await fetch(capUrl);
-           if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
-           const blob = await res.blob();
-           const file = new File([blob], comic.title, { type: blob.type });
-           
-           libraryScrollYRef.current = window.scrollY;
-           setActiveComicFile(file);
-           setActiveComicId(id);
-        } else {
-          throw new Error('Файл больше не доступен. Возможно, он был удалён.');
-        }
-      }
+      const capUrl = (window as any).Capacitor 
+        ? (window as any).Capacitor.convertFileSrc(comic.uri)
+        : comic.uri;
+        
+      const res = await fetch(capUrl);
+      if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
+      const blob = await res.blob();
+      const file = new File([blob], comic.title, { type: blob.type });
+      
+      libraryScrollYRef.current = window.scrollY;
+      setActiveComicFile(file);
+      setActiveComicId(id);
     } catch (err) {
       console.error('Error loading comic file:', err);
       alert(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
-      if (err instanceof Error && err.message.includes('Файл больше не доступен')) {
-        handleDeleteComic(id);
-      }
+      handleDeleteComic(id);
     } finally {
       setIsImporting(false);
       setImportProgress('');
@@ -837,6 +827,7 @@ function App() {
           onSyncLibrary={() => syncLibrary(libraryFolderUri)}
           isSelectMode={isSelectMode}
           setIsSelectMode={setIsSelectMode}
+          onChangeLibraryFolder={selectLibraryFolder}
         />
       )}
 

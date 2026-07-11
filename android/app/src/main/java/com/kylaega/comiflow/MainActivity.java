@@ -292,30 +292,76 @@ public class MainActivity extends BridgeActivity {
                         result.put("coverBase64", coverBase64);
                     } else {
                         // CBZ/ZIP Parsing
-                        ZipInputStream zis = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
-                        ZipEntry ze;
                         ArrayList<String> pages = new ArrayList<>();
                         byte[] tempCoverBytes = null;
-                        String firstImagePath = null;
-
-                        while ((ze = zis.getNextEntry()) != null) {
-                            String name = ze.getName();
-                            if (!ze.isDirectory() && isImageFile(name)) {
-                                pages.add(name);
-                                if (firstImagePath == null || name.compareToIgnoreCase(firstImagePath) < 0) {
-                                    firstImagePath = name;
-                                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                    byte[] buffer = new byte[8192];
-                                    int len;
-                                    while ((len = zis.read(buffer)) != -1) {
-                                        baos.write(buffer, 0, len);
+                        boolean parsedSuccessfully = false;
+                        
+                        try {
+                            ParcelFileDescriptor pfd = MainActivity.this.getContentResolver().openFileDescriptor(uri, "r");
+                            if (pfd != null) {
+                                File fdFile = new File("/proc/self/fd/" + pfd.getFd());
+                                java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(fdFile);
+                                java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zipFile.entries();
+                                String firstImagePath = null;
+                                
+                                while (entries.hasMoreElements()) {
+                                    java.util.zip.ZipEntry ze = entries.nextElement();
+                                    String name = ze.getName();
+                                    if (!ze.isDirectory() && isImageFile(name)) {
+                                        pages.add(name);
+                                        if (firstImagePath == null || name.compareToIgnoreCase(firstImagePath) < 0) {
+                                            firstImagePath = name;
+                                        }
                                     }
-                                    tempCoverBytes = baos.toByteArray();
                                 }
+                                
+                                if (firstImagePath != null) {
+                                    java.util.zip.ZipEntry coverEntry = zipFile.getEntry(firstImagePath);
+                                    if (coverEntry != null) {
+                                        java.io.InputStream is = zipFile.getInputStream(coverEntry);
+                                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                        byte[] buffer = new byte[8192];
+                                        int len;
+                                        while ((len = is.read(buffer)) != -1) {
+                                            baos.write(buffer, 0, len);
+                                        }
+                                        tempCoverBytes = baos.toByteArray();
+                                        is.close();
+                                    }
+                                }
+                                zipFile.close();
+                                pfd.close();
+                                parsedSuccessfully = true;
                             }
-                            zis.closeEntry();
+                        } catch (Exception e) {
+                            e.printStackTrace();
                         }
-                        zis.close();
+                        
+                        if (!parsedSuccessfully) {
+                            pages.clear();
+                            tempCoverBytes = null;
+                            ZipInputStream zis = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
+                            ZipEntry ze;
+                            String firstImagePath = null;
+                            while ((ze = zis.getNextEntry()) != null) {
+                                String name = ze.getName();
+                                if (!ze.isDirectory() && isImageFile(name)) {
+                                    pages.add(name);
+                                    if (firstImagePath == null || name.compareToIgnoreCase(firstImagePath) < 0) {
+                                        firstImagePath = name;
+                                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                        byte[] buffer = new byte[8192];
+                                        int len;
+                                        while ((len = zis.read(buffer)) != -1) {
+                                            baos.write(buffer, 0, len);
+                                        }
+                                        tempCoverBytes = baos.toByteArray();
+                                    }
+                                }
+                                zis.closeEntry();
+                            }
+                            zis.close();
+                        }
 
                         // Sort pages alphabetically
                         Collections.sort(pages, new Comparator<String>() {

@@ -22,6 +22,7 @@ interface LibraryProps {
   onSyncLibrary: () => void;
   isSelectMode: boolean;
   setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
+  onChangeLibraryFolder?: () => void;
 }
 
 interface ComicCardProps {
@@ -194,6 +195,7 @@ export const Library: React.FC<LibraryProps> = ({
   onSyncLibrary,
   isSelectMode,
   setIsSelectMode,
+  onChangeLibraryFolder,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>(() => {
@@ -368,6 +370,19 @@ export const Library: React.FC<LibraryProps> = ({
           >
             Выбрать папку
           </button>
+          {onChangeLibraryFolder && (
+            <button
+              type="button"
+              className="shelf-tab-btn"
+              style={{ padding: '6px 12px', fontSize: '13px', backgroundColor: 'var(--accent)', color: '#fff' }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onChangeLibraryFolder();
+              }}
+            >
+              Выбрать папку SAF
+            </button>
+          )}
         </div>
       </div>
 
@@ -498,10 +513,10 @@ export const Library: React.FC<LibraryProps> = ({
             </button>
           </div>
           {selectedComicIds.size > 0 && (
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', flex: '1 1 auto' }}>
               <select
                 className="card-shelf-select"
-                style={{ width: 'auto', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px', flexShrink: 0 }}
+                style={{ flex: '1 1 auto', minWidth: '150px', fontSize: '12px', padding: '6px 28px 6px 12px', height: '34px' }}
                 defaultValue=""
                 onChange={(e) => {
                   const val = e.target.value;
@@ -520,7 +535,7 @@ export const Library: React.FC<LibraryProps> = ({
               </select>
               <button
                 className="btn btn-danger"
-                style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px', flexShrink: 0, whiteSpace: 'nowrap' }}
+                style={{ padding: '8px 16px', fontSize: '12px', height: '34px', display: 'inline-flex', alignItems: 'center', gap: '6px', borderRadius: '10px', flex: '1 1 auto', justifyContent: 'center', whiteSpace: 'nowrap' }}
                 onClick={() => {
                   onBulkDeleteComics(Array.from(selectedComicIds));
                   setSelectedComicIds(new Set());
