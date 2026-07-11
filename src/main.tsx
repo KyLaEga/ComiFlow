@@ -80,12 +80,30 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>,
 )
 
-// Register service worker for offline support (PWA)
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
-      .then((reg) => console.log('ServiceWorker registered:', reg.scope))
-      .catch((err) => console.warn('ServiceWorker registration failed:', err));
-  });
+// Handle service worker registration/unregistration for Capacitor vs PWA
+const isCapacitor = !!(window as any).Capacitor || !!(window as any).ComiFlowBridge;
+
+if ('serviceWorker' in navigator) {
+  if (isCapacitor) {
+    // Unregister any legacy service workers on Capacitor to prevent caching index.html (which causes white screen on updates)
+    navigator.serviceWorker.getRegistrations().then((registrations) => {
+      let shouldReload = false;
+      for (const registration of registrations) {
+        registration.unregister();
+        shouldReload = true;
+      }
+      if (shouldReload) {
+        console.log('SW unregistered. Reloading to clear caches.');
+        window.location.reload();
+      }
+    });
+  } else if (import.meta.env.PROD) {
+    // Register PWA service worker only for web environments
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js')
+        .then((reg) => console.log('ServiceWorker registered:', reg.scope))
+        .catch((err) => console.warn('ServiceWorker registration failed:', err));
+    });
+  }
 }
 
