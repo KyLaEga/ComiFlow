@@ -53,6 +53,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   volumeKeysEnabled: false,
   brightness: 100,
   contrast: 100,
+  deletePhysicalFile: false,
 };
 
 const updateNativeVolumeKeysState = (enabled: boolean) => {
@@ -647,6 +648,14 @@ function App() {
         URL.revokeObjectURL(comic.coverUrl);
       }
       await deleteComic(id);
+      
+      if (settings.deletePhysicalFile && comic) {
+        const bridge = (window as any).ComiFlowBridge;
+        if (bridge && typeof bridge.deleteSAFFile === 'function') {
+          bridge.deleteSAFFile(comic.uri);
+        }
+      }
+
       setComics((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
       console.error('Failed to delete comic:', err);
@@ -712,10 +721,15 @@ function App() {
       setIsImporting(true);
       setImportProgress('Удаление файлов...');
       try {
+        const bridge = (window as any).ComiFlowBridge;
         for (const id of ids) {
           const comic = comics.find((c) => c.id === id);
           if (comic?.coverUrl) URL.revokeObjectURL(comic.coverUrl);
           await deleteComic(id);
+          
+          if (settings.deletePhysicalFile && comic && bridge && typeof bridge.deleteSAFFile === 'function') {
+            bridge.deleteSAFFile(comic.uri);
+          }
         }
         const list = await getAllComics();
         setComics(list);

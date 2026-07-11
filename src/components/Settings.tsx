@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2 } from 'lucide-react';
+import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2 } from 'lucide-react';
 
 export interface ReaderSettings {
   theme: 'light' | 'dark' | 'oled' | 'system';
@@ -11,6 +11,7 @@ export interface ReaderSettings {
   volumeKeysEnabled: boolean;
   brightness: number; // 50 to 150
   contrast: number; // 50 to 150
+  deletePhysicalFile?: boolean;
 }
 
 interface SettingsProps {
@@ -299,6 +300,20 @@ export const Settings: React.FC<SettingsProps> = ({
                 type="checkbox"
                 checked={settings.volumeKeysEnabled}
                 onChange={(e) => onUpdateSettings({ volumeKeysEnabled: e.target.checked })}
+              />
+              <span className="switch-slider"></span>
+            </label>
+          </div>
+
+          <div className="settings-option-row">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+              <Trash2 size={16} /> Удалять файлы с устройства
+            </span>
+            <label className="switch-control">
+              <input
+                type="checkbox"
+                checked={settings.deletePhysicalFile || false}
+                onChange={(e) => onUpdateSettings({ deletePhysicalFile: e.target.checked })}
               />
               <span className="switch-slider"></span>
             </label>

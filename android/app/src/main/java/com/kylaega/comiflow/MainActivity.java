@@ -457,6 +457,17 @@ public class MainActivity extends BridgeActivity {
             }
 
             @JavascriptInterface
+            public boolean deleteSAFFile(String uriString) {
+                try {
+                    Uri uri = Uri.parse(uriString);
+                    return DocumentsContract.deleteDocument(MainActivity.this.getContentResolver(), uri);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return false;
+                }
+            }
+
+            @JavascriptInterface
             public void clearImportCache() {
                 try {
                     // Delete all "open_*" files in cache dir
