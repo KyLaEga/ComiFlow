@@ -340,27 +340,42 @@ public class MainActivity extends BridgeActivity {
                         if (!parsedSuccessfully) {
                             pages.clear();
                             tempCoverBytes = null;
+                            
+                            // Pass 1: Scan headers only to collect names and determine alphabetical cover entry
+                            String targetCoverPath = null;
                             ZipInputStream zis = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
                             ZipEntry ze;
-                            String firstImagePath = null;
                             while ((ze = zis.getNextEntry()) != null) {
                                 String name = ze.getName();
                                 if (!ze.isDirectory() && isImageFile(name)) {
                                     pages.add(name);
-                                    if (firstImagePath == null || name.compareToIgnoreCase(firstImagePath) < 0) {
-                                        firstImagePath = name;
-                                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                                        byte[] buffer = new byte[8192];
-                                        int len;
-                                        while ((len = zis.read(buffer)) != -1) {
-                                            baos.write(buffer, 0, len);
-                                        }
-                                        tempCoverBytes = baos.toByteArray();
+                                    if (targetCoverPath == null || name.compareToIgnoreCase(targetCoverPath) < 0) {
+                                        targetCoverPath = name;
                                     }
                                 }
                                 zis.closeEntry();
                             }
                             zis.close();
+                            
+                            // Pass 2: Extract only the target cover
+                            if (targetCoverPath != null) {
+                                ZipInputStream zis2 = new ZipInputStream(MainActivity.this.getContentResolver().openInputStream(uri));
+                                while ((ze = zis2.getNextEntry()) != null) {
+                                    if (ze.getName().equals(targetCoverPath)) {
+                                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                        byte[] buffer = new byte[8192];
+                                        int len;
+                                        while ((len = zis2.read(buffer)) != -1) {
+                                            baos.write(buffer, 0, len);
+                                        }
+                                        tempCoverBytes = baos.toByteArray();
+                                        zis2.closeEntry();
+                                        break;
+                                    }
+                                    zis2.closeEntry();
+                                }
+                                zis2.close();
+                            }
                         }
 
                         // Sort pages alphabetically

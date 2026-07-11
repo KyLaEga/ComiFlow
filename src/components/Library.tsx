@@ -22,7 +22,6 @@ interface LibraryProps {
   onSyncLibrary: () => void;
   isSelectMode: boolean;
   setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
-  onChangeLibraryFolder?: () => void;
 }
 
 interface ComicCardProps {
@@ -195,7 +194,6 @@ export const Library: React.FC<LibraryProps> = ({
   onSyncLibrary,
   isSelectMode,
   setIsSelectMode,
-  onChangeLibraryFolder,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>(() => {
@@ -370,19 +368,6 @@ export const Library: React.FC<LibraryProps> = ({
           >
             Выбрать папку
           </button>
-          {onChangeLibraryFolder && (
-            <button
-              type="button"
-              className="shelf-tab-btn"
-              style={{ padding: '6px 12px', fontSize: '13px', backgroundColor: 'var(--accent)', color: '#fff' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onChangeLibraryFolder();
-              }}
-            >
-              Выбрать папку SAF
-            </button>
-          )}
         </div>
       </div>
 

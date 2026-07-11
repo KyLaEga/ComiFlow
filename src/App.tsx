@@ -44,7 +44,7 @@ const base64ToBlob = (base64: string, mimeType: string): Blob => {
 };
 
 const DEFAULT_SETTINGS: ReaderSettings = {
-  theme: 'dark',
+  theme: 'system',
   direction: 'ltr',
   mode: 'paged',
   fitMode: 'contain',
@@ -827,7 +827,6 @@ function App() {
           onSyncLibrary={() => syncLibrary(libraryFolderUri)}
           isSelectMode={isSelectMode}
           setIsSelectMode={setIsSelectMode}
-          onChangeLibraryFolder={selectLibraryFolder}
         />
       )}
 
