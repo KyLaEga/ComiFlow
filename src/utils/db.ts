@@ -69,14 +69,6 @@ export async function migrateCovers(): Promise<void> {
 export async function getAllComics(): Promise<ComicMetadata[]> {
   const comics: ComicMetadata[] = [];
   await metadataStore.iterate<ComicMetadata, void>((value) => {
-    // Generate object URL for the cover blob so React can display it
-    if (value.coverBlob) {
-      try {
-        value.coverUrl = URL.createObjectURL(value.coverBlob);
-      } catch (err) {
-        console.error('Failed to create object URL for cover:', err);
-      }
-    }
     comics.push(value);
   });
   // Sort by addedAt descending
@@ -117,8 +109,6 @@ export async function saveComic(
   // Save metadata
   await metadataStore.setItem(id, metadata);
 
-  // Add cover URL for runtime display
-  metadata.coverUrl = URL.createObjectURL(compressedCover);
   return metadata;
 }
 

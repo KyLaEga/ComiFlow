@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { VirtuosoGrid } from 'react-virtuoso';
 import type { ComicMetadata, Shelf } from '../utils/db';
 import { BookOpen, Plus, Search, Trash2, FolderOpen, AlertTriangle } from 'lucide-react';
@@ -24,6 +24,158 @@ interface LibraryProps {
   setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
+interface ComicCardProps {
+  comic: ComicMetadata;
+  isSelectMode: boolean;
+  selectedComicIds: Set<string>;
+  onSelectComic: (id: string) => void;
+  onDeleteComic: (id: string) => void;
+  onAssignComicToShelf: (comicId: string, shelfId: string | null) => void;
+  shelves: Shelf[];
+  handleCardClick: (id: string) => void;
+  formatBytes: (bytes: number) => string;
+}
+
+const ComicCard: React.FC<ComicCardProps> = ({
+  comic,
+  isSelectMode,
+  selectedComicIds,
+  onDeleteComic,
+  onAssignComicToShelf,
+  shelves,
+  handleCardClick,
+  formatBytes
+}) => {
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (comic.coverBlob) {
+      let url = '';
+      try {
+        url = URL.createObjectURL(comic.coverBlob);
+        setCoverUrl(url);
+      } catch (err) {
+        console.error('Failed to create object URL for cover:', err);
+      }
+      return () => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      };
+    }
+  }, [comic.coverBlob]);
+
+  const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
+
+  return (
+    <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
+      {/* Actions overlay */}
+      <div className="card-actions-overlay">
+        <button
+          className="card-btn-delete"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (window.confirm(`Удалить комикс "${comic.title}"?`)) {
+              onDeleteComic(comic.id);
+            }
+          }}
+          title="Удалить"
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      {/* Cover Image Wrapper */}
+      <div className="card-cover-wrapper" onClick={() => handleCardClick(comic.id)} style={{ position: 'relative' }}>
+        {isSelectMode && (
+          <div 
+            style={{
+              position: 'absolute',
+              top: '10px',
+              left: '10px',
+              width: '22px',
+              height: '22px',
+              borderRadius: '6px',
+              border: '2px solid #ffffff',
+              backgroundColor: selectedComicIds.has(comic.id) ? 'var(--accent)' : 'rgba(0,0,0,0.5)',
+              zIndex: 5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+            }}
+          >
+            {selectedComicIds.has(comic.id) && '✓'}
+          </div>
+        )}
+        {coverUrl ? (
+          <img
+            src={coverUrl}
+            alt={comic.title}
+            className="card-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="empty-cover-placeholder">
+            <BookOpen size={48} />
+          </div>
+        )}
+
+        {/* Reading Progress Indicator */}
+        {comic.currentPage > 0 && (
+          <>
+            <div
+              className="card-progress-bar"
+              style={{ width: `${progressPercent}%` }}
+            />
+            <span className="card-progress-badge">
+              {progressPercent}%
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Details Section */}
+      <div className="card-details">
+        <h4 
+          className="card-title" 
+          onClick={() => handleCardClick(comic.id)}
+          title={comic.title}
+        >
+          {comic.title}
+        </h4>
+        <div className="card-meta">
+          <span>{comic.totalPages} стр.</span>
+          <span>{formatBytes(comic.size)}</span>
+        </div>
+        
+        {/* Shelf select dropdown */}
+        <div className="card-shelf-select-container">
+          <select
+            className="card-shelf-select"
+            value={comic.shelfId || ''}
+            onChange={(e) => {
+              const val = e.target.value;
+              onAssignComicToShelf(comic.id, val === '' ? null : val);
+            }}
+            onClick={(e) => e.stopPropagation()} // Prevent card opening reader
+          >
+            <option value="">Без полки</option>
+            {shelves.map((shelf) => (
+              <option key={shelf.id} value={shelf.id}>
+                Полка: {shelf.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const Library: React.FC<LibraryProps> = ({
   comics,
   onSelectComic,
@@ -44,7 +196,21 @@ export const Library: React.FC<LibraryProps> = ({
   setIsSelectMode,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>('added');
+  const [sortBy, setSortBy] = useState<'added' | 'title' | 'recent' | 'size'>(() => {
+    return (localStorage.getItem('comiflow_sort_by') as any) || 'added';
+  });
+  const [filterStatus, setFilterStatus] = useState<'all' | 'unread' | 'read'>(() => {
+    return (localStorage.getItem('comiflow_filter_status') as any) || 'all';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('comiflow_sort_by', sortBy);
+  }, [sortBy]);
+
+  useEffect(() => {
+    localStorage.setItem('comiflow_filter_status', filterStatus);
+  }, [filterStatus]);
+
   const [isDragActive, setIsDragActive] = useState(false);
   const [selectedComicIds, setSelectedComicIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -110,10 +276,20 @@ export const Library: React.FC<LibraryProps> = ({
     if (!matchesSearch) return false;
     
     if (activeShelfId !== null) {
-      return comic.shelfId === activeShelfId;
+      if (comic.shelfId !== activeShelfId) return false;
+    } else {
+      if (comic.shelfId) return false;
     }
-    // If activeShelfId is null ("Все файлы"), hide shelved files
-    return !comic.shelfId;
+
+    // Filter status logic
+    const isCompleted = comic.currentPage >= (comic.totalPages - 1) && comic.currentPage > 0;
+    if (filterStatus === 'unread') {
+      return !isCompleted;
+    } else if (filterStatus === 'read') {
+      return isCompleted;
+    }
+
+    return true;
   });
 
   const sortedComics = [...filteredComics].sort((a, b) => {
@@ -278,6 +454,15 @@ export const Library: React.FC<LibraryProps> = ({
             </button>
             <select
               className="select-input"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as any)}
+            >
+              <option value="all">Все файлы</option>
+              <option value="unread">Непрочитанные</option>
+              <option value="read">Прочитанные</option>
+            </select>
+            <select
+              className="select-input"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
             >
@@ -356,114 +541,18 @@ export const Library: React.FC<LibraryProps> = ({
           data={sortedComics}
           listClassName="comic-grid"
           itemContent={(_, comic) => {
-            const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
-            
             return (
-              <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
-                {/* Actions overlay */}
-                <div className="card-actions-overlay">
-                  <button
-                    className="card-btn-delete"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (window.confirm(`Удалить комикс "${comic.title}"?`)) {
-                        onDeleteComic(comic.id);
-                      }
-                    }}
-                    title="Удалить"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-
-                {/* Cover Image Wrapper */}
-                <div className="card-cover-wrapper" onClick={() => handleCardClick(comic.id)} style={{ position: 'relative' }}>
-                  {isSelectMode && (
-                    <div 
-                      style={{
-                        position: 'absolute',
-                        top: '10px',
-                        left: '10px',
-                        width: '22px',
-                        height: '22px',
-                        borderRadius: '6px',
-                        border: '2px solid #ffffff',
-                        backgroundColor: selectedComicIds.has(comic.id) ? 'var(--accent)' : 'rgba(0,0,0,0.5)',
-                        zIndex: 5,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#ffffff',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-                      }}
-                    >
-                      {selectedComicIds.has(comic.id) && '✓'}
-                    </div>
-                  )}
-                  {comic.coverUrl ? (
-                    <img
-                      src={comic.coverUrl}
-                      alt={comic.title}
-                      className="card-cover"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="empty-cover-placeholder">
-                      <BookOpen size={48} />
-                    </div>
-                  )}
-
-                  {/* Reading Progress Indicator */}
-                  {comic.currentPage > 0 && (
-                    <>
-                      <div
-                        className="card-progress-bar"
-                        style={{ width: `${progressPercent}%` }}
-                      />
-                      <span className="card-progress-badge">
-                        {progressPercent}%
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {/* Details Section */}
-                <div className="card-details">
-                  <h4 
-                    className="card-title" 
-                    onClick={() => handleCardClick(comic.id)}
-                    title={comic.title}
-                  >
-                    {comic.title}
-                  </h4>
-                  <div className="card-meta">
-                    <span>{comic.totalPages} стр.</span>
-                    <span>{formatBytes(comic.size)}</span>
-                  </div>
-                  
-                  {/* Shelf select dropdown */}
-                  <div className="card-shelf-select-container">
-                    <select
-                      className="card-shelf-select"
-                      value={comic.shelfId || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        onAssignComicToShelf(comic.id, val === '' ? null : val);
-                      }}
-                      onClick={(e) => e.stopPropagation()} // Prevent card opening reader
-                    >
-                      <option value="">Без полки</option>
-                      {shelves.map((shelf) => (
-                        <option key={shelf.id} value={shelf.id}>
-                          Полка: {shelf.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
+              <ComicCard
+                comic={comic}
+                isSelectMode={isSelectMode}
+                selectedComicIds={selectedComicIds}
+                onSelectComic={onSelectComic}
+                onDeleteComic={onDeleteComic}
+                onAssignComicToShelf={onAssignComicToShelf}
+                shelves={shelves}
+                handleCardClick={handleCardClick}
+                formatBytes={formatBytes}
+              />
             );
           }}
         />

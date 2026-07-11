@@ -10,7 +10,8 @@ import {
   getAllShelves,
   saveShelf,
   deleteShelf,
-  assignComicToShelf
+  assignComicToShelf,
+  migrateCovers
 } from './utils/db';
 import type { ComicMetadata, Shelf } from './utils/db';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
@@ -121,6 +122,11 @@ function App() {
         if (bridge && typeof bridge.clearImportCache === 'function') {
           bridge.clearImportCache();
         }
+
+        // Refresh progress state in library listing
+        getAllComics().then((list) => {
+          setComics(list);
+        });
       } else if (isSettingsOpenRef.current) {
         // If settings panel is open, close it
         setIsSettingsOpen(false);
@@ -373,6 +379,7 @@ function App() {
   // Initialize DB and Load Settings, Comics & Shelves
   useEffect(() => {
     initDb();
+    migrateCovers().catch(err => console.error('Failed to migrate covers:', err));
     
     const handleFolderSelected = (e: any) => {
       const uri = e.detail?.uri;
@@ -603,6 +610,9 @@ function App() {
     } catch (err) {
       console.error('Error loading comic file:', err);
       alert(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+      if (err instanceof Error && err.message.includes('Файл больше не доступен')) {
+        handleDeleteComic(id);
+      }
     } finally {
       setIsImporting(false);
       setImportProgress('');
