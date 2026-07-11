@@ -68,8 +68,9 @@ export const Settings: React.FC<SettingsProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+    <div className="settings-overlay active">
+      <div className="settings-backdrop" onClick={onClose} />
+      <div className="settings-panel">
         <div className="settings-header">
           <h3 className="settings-title">Настройки</h3>
           <button className="btn-icon" onClick={onClose} aria-label="Закрыть">
