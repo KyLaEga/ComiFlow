@@ -18,10 +18,15 @@ android {
     }
     signingConfigs {
         release {
-            storeFile file("release.keystore")
-            storePassword "comiflow"
-            keyAlias "releasekey"
-            keyPassword "comiflow"
+            // Signing secrets are read from android/local.properties (gitignored)
+            // and fall back to env vars. They must never be hardcoded in the repo.
+            def props = new Properties()
+            def lp = rootProject.file('local.properties')
+            if (lp.exists()) props.load(new FileInputStream(lp))
+            storeFile file(props.getProperty('RELEASE_STORE_FILE') ?: System.env.RELEASE_STORE_FILE ?: 'release.keystore')
+            storePassword props.getProperty('RELEASE_STORE_PASSWORD') ?: System.env.RELEASE_STORE_PASSWORD ?: ''
+            keyAlias props.getProperty('RELEASE_KEY_ALIAS') ?: System.env.RELEASE_KEY_ALIAS ?: 'releasekey'
+            keyPassword props.getProperty('RELEASE_KEY_PASSWORD') ?: System.env.RELEASE_KEY_PASSWORD ?: ''
         }
     }
     buildTypes {

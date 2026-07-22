@@ -1,4 +1,6 @@
 import JSZip from 'jszip';
+import { isTauri, getCbzPage } from './nativeBridge';
+import { base64ToBlob } from './pageUtils';
 
 // Allowed image extensions
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'];
@@ -15,11 +17,11 @@ export const naturalSort = (a: string, b: string) => {
  */
 export const isImageFile = (filename: string): boolean => {
   const lower = filename.toLowerCase();
-  
+
   // Exclude hidden files or OS metadata directories
   if (
-    lower.startsWith('.') || 
-    lower.includes('__macosx') || 
+    lower.startsWith('.') ||
+    lower.includes('__macosx') ||
     lower.includes('thumbs.db') ||
     lower.endsWith('/')
   ) {
@@ -44,16 +46,17 @@ export interface ParsedCollection {
 export type ParseResult = ParsedComic | ParsedCollection;
 
 /**
- * Parses a CBZ file Blob to extract its title, page list, and cover image
- * Or returns a collection of nested archives if no images are found
+ * Parses a CBZ file Blob to extract its title, page list, and cover image.
+ * NOTE: This is the WEB fallback path (used only when NOT in Tauri).
+ * In Tauri, metadata extraction happens server-side via getComicMetadataNative.
  */
 export async function parseCBZ(file: File | Blob, originalName: string): Promise<ParseResult> {
   const zip = await JSZip.loadAsync(file);
-  
+
   // Collect all image files and nested archives
   const filePaths: string[] = [];
   const archivePaths: string[] = [];
-  
+
   zip.forEach((relativePath, fileEntry) => {
     if (!fileEntry.dir) {
       if (isImageFile(relativePath)) {
@@ -62,8 +65,8 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
         const lower = relativePath.toLowerCase();
         const filename = relativePath.split('/').pop() || relativePath;
         if (
-          (lower.endsWith('.cbz') || lower.endsWith('.zip')) && 
-          !filename.startsWith('.') && 
+          (lower.endsWith('.cbz') || lower.endsWith('.zip')) &&
+          !filename.startsWith('.') &&
           !filename.startsWith('._')
         ) {
           archivePaths.push(relativePath);
@@ -85,7 +88,7 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
     }
 
     const rawCoverBlob = await coverZipFile.async('blob');
-    
+
     // Assign proper MIME type based on file extension
     const ext = coverPath.split('.').pop()?.toLowerCase() || 'jpg';
     let mimeType = 'image/jpeg';
@@ -93,9 +96,9 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
     else if (ext === 'webp') mimeType = 'image/webp';
     else if (ext === 'gif') mimeType = 'image/gif';
     else if (ext === 'bmp') mimeType = 'image/bmp';
-    
+
     const coverBlob = new Blob([rawCoverBlob], { type: mimeType });
-    
+
     // Remove extension for title
     const title = originalName.replace(/\.[^/.]+$/, "");
 
@@ -106,7 +109,7 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
       coverBlob,
     };
   }
-  
+
   // If no images but nested archives exist, treat as collection
   if (archivePaths.length > 0) {
     const archives = [];
@@ -118,7 +121,7 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
         archives.push({ name, blob });
       }
     }
-    
+
     return {
       type: 'collection',
       archives,
@@ -128,27 +131,10 @@ export async function parseCBZ(file: File | Blob, originalName: string): Promise
   throw new Error('В файле не найдено изображений или вложенных комиксов.');
 }
 
-// In-memory cache for the currently reading zip file to optimize performance
+// In-memory cache for the currently reading zip file (web fallback only).
+// In Tauri we read pages straight from disk, so this cache stays unused.
 let cachedZipId: string | null = null;
 let cachedZip: JSZip | null = null;
-
-/**
- * Loads and caches the JSZip instance for reading pages
- */
-async function getZipInstance(id: string, fileBlob: Blob): Promise<JSZip> {
-  if (cachedZipId === id && cachedZip) {
-    return cachedZip;
-  }
-  
-  // Clear previous cache
-  cachedZipId = null;
-  cachedZip = null;
-
-  const zip = await JSZip.loadAsync(fileBlob);
-  cachedZipId = id;
-  cachedZip = zip;
-  return zip;
-}
 
 /**
  * Clear current active zip cache when closing reader
@@ -159,15 +145,39 @@ export function clearCBZCache() {
 }
 
 /**
- * Extracts a specific page from the CBZ blob
+ * Extract a single page as a Blob.
+ *
+ * In Tauri: reads ONLY the requested entry from disk via the Rust
+ * `get_cbz_page` command — the whole archive never enters RAM. Returns a
+ * Blob built from the data-URL (correct MIME preserved).
+ *
+ * Web fallback: uses the cached JSZip instance (legacy path).
  */
 export async function getPageBlob(
   id: string,
-  fileBlob: Blob,
+  fileBlob: Blob | null,
   pagePath: string
 ): Promise<Blob> {
-  const zip = await getZipInstance(id, fileBlob);
-  const fileEntry = zip.file(pagePath);
+  // Tauri fast path: read one entry from disk.
+  if (isTauri()) {
+    const dataUrl = await getCbzPage(id, pagePath);
+    if (!dataUrl) {
+      throw new Error(`Страница не найдена в архиве: ${pagePath}`);
+    }
+    return base64ToBlob(dataUrl);
+  }
+
+  // Web fallback: parse the blob with JSZip.
+  if (!fileBlob) {
+    throw new Error('Нет данных файла для чтения страницы.');
+  }
+  if (cachedZipId !== id || !cachedZip) {
+    cachedZipId = null;
+    cachedZip = null;
+    cachedZip = await JSZip.loadAsync(fileBlob);
+    cachedZipId = id;
+  }
+  const fileEntry = cachedZip.file(pagePath);
   if (!fileEntry) {
     throw new Error(`Страница не найдена в архиве: ${pagePath}`);
   }

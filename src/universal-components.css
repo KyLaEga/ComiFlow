@@ -1,78 +1,432 @@
 /* --- UNIVERSAL COMPONENT STYLES --- */
 
 /* Custom Range Sliders with full-height hitboxes and mathematically perfect centering */
-input[type="range"] {
-  accent-color: var(--text-primary);
-  cursor: pointer;
+input[type="range"]:not(.rainbow-hue-slider) {
   -webkit-appearance: none;
-  background: transparent;
-  height: 100% !important; /* Stretch to fill container height (e.g. 48px/44px) for maximum clickable hit area */
+  appearance: none;
+  background: transparent !important;
+  border: none !important;
+  outline: none;
+  height: 20px;
   width: 100%;
-  display: block !important;
-  margin: 0 !important;
-  padding: 0 !important;
+  display: block;
+  margin: 0;
+  padding: 0;
   box-sizing: border-box;
+  cursor: pointer;
 }
 
-input[type="range"]:focus {
+input[type="range"]:not(.rainbow-hue-slider):focus {
   outline: none;
 }
 
 /* Webkit / Safari Track */
-input[type="range"]::-webkit-slider-runnable-track {
-  width: 100%;
-  height: 4px;
-  background: rgba(128, 128, 128, 0.4) !important; /* Neutral grey visible in all themes */
-  border-radius: 2px;
-  border: none;
-  margin-top: 0 !important;
+input[type="range"]:not(.rainbow-hue-slider)::-webkit-slider-runnable-track {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  height: 6px;
+  border-radius: 3px;
 }
 
 /* Webkit / Safari Thumb */
-input[type="range"]::-webkit-slider-thumb {
+input[type="range"]:not(.rainbow-hue-slider)::-webkit-slider-thumb {
   -webkit-appearance: none;
-  height: 14px;
+  appearance: none;
   width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: var(--text-primary);
-  /* Center the 14px thumb on the 4px track: (4 / 2) - (14 / 2) = -5px */
-  margin-top: -5px; 
+  background: var(--accent);
   cursor: pointer;
+  margin-top: -5px; /* Centers the thumb vertically on a 6px track */
   border: none;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: transform 0.1s ease, background-color 0.1s ease;
 }
 
-input[type="range"]::-webkit-slider-thumb:hover {
+input[type="range"]:not(.rainbow-hue-slider)::-webkit-slider-thumb:hover {
   transform: scale(1.15);
 }
 
 /* Mozilla Firefox Track */
-input[type="range"]::-moz-range-track {
-  width: 100%;
-  height: 4px;
-  background: rgba(128, 128, 128, 0.4) !important;
-  border-radius: 2px;
-  border: none;
+input[type="range"]:not(.rainbow-hue-slider)::-moz-range-track {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  height: 6px;
+  border-radius: 3px;
 }
 
 /* Mozilla Firefox Thumb */
-input[type="range"]::-moz-range-thumb {
-  height: 14px;
+input[type="range"]:not(.rainbow-hue-slider)::-moz-range-thumb {
   width: 14px;
+  height: 14px;
   border-radius: 50%;
-  background: var(--text-primary);
-  border: none;
+  background: var(--accent);
   cursor: pointer;
+  border: none;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: transform 0.1s ease, background-color 0.1s ease;
 }
 
-input[type="range"]::-moz-range-thumb:hover {
+input[type="range"]:not(.rainbow-hue-slider)::-moz-range-thumb:hover {
   transform: scale(1.15);
 }
 
 input[type="range"]:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Custom Scrollbars matching dark/light themes */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Premium Buttons */
+button {
+  font-family: inherit;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+  outline: none;
+}
+button:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Primary/Accent Action Buttons */
+button.primary-btn, button.action-btn {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+button.primary-btn:hover:not(:disabled), button.action-btn:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+/* Dropdowns & Select Fields */
+select {
+  font-family: inherit;
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 12px;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+select:hover:not(:disabled) {
+  border-color: var(--accent);
+  background-color: var(--bg-hover);
+}
+select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Stylized Checkboxes */
+.checkbox-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  border: 1.5px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+/* Reusable Glassmorphism Cards & Panels */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-2xl);   /* 16px */
+  box-shadow: var(--shadow-lg);       /* 0 8px 24px */
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+/* Standardized Text Inputs & Textareas */
+input[type="text"], input[type="password"], textarea {
+  font-family: inherit;
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+input[type="text"]:disabled, input[type="password"]:disabled, textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Premium Segmented Controls (horizontal button switches) */
+.segmented-control {
+  display: flex;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+  box-sizing: border-box;
+}
+.segmented-control button {
+  flex: 1;
+  font-weight: 500;
+  font-size: calc(var(--fs-base) - 1px);
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+.segmented-control button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background-color: rgba(128, 128, 128, 0.08);
+  box-shadow: none;
+}
+.segmented-control button.active {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  font-weight: 600;
+}
+
+/* Sidebar Groups & Labeling */
+.sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.sidebar-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+/* Row Lists & Tree Items with mathematical height matching */
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+  user-select: none;
+}
+.list-row:hover {
+  background-color: var(--bg-hover);
+}
+.list-row.selected {
+  background-color: var(--row-selected) !important;
+  color: var(--text-primary);
+}
+
+/* Progress Indicators */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.progress-fill {
+  height: 100%;
+  background-color: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Clean Alert Banners & Callouts */
+.alert-banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: var(--fs-base);
+  line-height: 1.4;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-color);
+  box-sizing: border-box;
+}
+.alert-banner.success {
+  background-color: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+}
+.alert-banner.danger {
+  background-color: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+.alert-banner.info {
+  background-color: var(--ref-bg);
+  border-color: var(--ref-border);
+  color: var(--ref-color);
+}
+
+/* Overlay Modals & Dialogs */
+.modal-overlay, .help-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-dialog, .help-modal, .confirm-modal {
+  width: 90%;
+  max-width: 520px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);    /* 12px */
+  box-shadow: var(--shadow-xl);       /* was hardcoded rgba */
+  padding: var(--pad-modal);          /* 24px */
+  box-sizing: border-box;
+  background: var(--glass-bg);        /* shorthand only — no background-color conflict */
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Button & Controls Standardization (38px Grid) */
+.sub-btn, .action-btn, .main-compare-btn, .preset-btn, .segmented-control button, select, .folder-input-row input, .filter-search, .icon-btn, .lang-select, .theme-trigger-btn {
+  height: 38px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.sub-btn {
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+  border-radius: 8px;
+}
+
+/* Floating Island Scrubber ("Плавающий остров") */
+.unified-control-slot {
+  padding: 8px 16px !important;
+  box-sizing: border-box !important;
+  width: 100%;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  pointer-events: auto;
+  position: relative;
+  z-index: 5;
+  flex: 0 0 auto;
+  min-height: 64px;
+}
+
+.unified-scrubber-box {
+  pointer-events: auto;
+  width: 100% !important;
+  max-width: 500px !important;
+  margin: 0 auto !important;
+  border-radius: 24px !important;
+  border: 1px solid var(--border-color) !important;
+  height: 48px !important;
+  padding: 0 20px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  background: rgba(150, 150, 150, 0.05) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 4px 16px var(--shadow) !important;
+  color: var(--text-primary) !important;
+}
+
+.unified-scrubber-box input[type="range"] {
+  flex: 1 1 auto !important;
+}
+
+/* Theme trigger button */
+.theme-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  height: 38px;
+}
+.theme-trigger-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent);
 }

@@ -5,13 +5,63 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <meta name="theme-color" content="#aa3bff" />
-    <meta name="description" content="ComiFlow - Премиальное PWA приложение для чтения комиксов и манги в формате .cbz и .zip" />
+    <meta name="theme-color" content="#4c5699" />
+    <meta name="description" content="ComiFlow - Премиальное приложение для чтения комиксов и манги в формате .cbz и .zip" />
     <title>ComiFlow - Comic Reader</title>
+    <style>
+      /* Splash background rendered before React mounts, so there is never a
+         white flash. Uses CSS vars once themes.css loads; falls back to dark. */
+      .app-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: var(--bg-primary, #0f1013);
+      }
+      .app-splash .spinner {
+        width: 50px;
+        height: 50px;
+        border: 4px solid rgba(128, 128, 128, 0.2);
+        border-top-color: var(--accent, #4c5699);
+        border-radius: 50%;
+        animation: comiflow-spin 1s linear infinite;
+      }
+      @keyframes comiflow-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+    <script>
+      // Resolve & apply the theme BEFORE React renders to avoid a dark FOUC.
+      // Migrates legacy theme names from the pre-Universal-UI era.
+      (function () {
+        try {
+          var raw = localStorage.getItem('comiflow_settings');
+          var theme = raw ? (JSON.parse(raw).theme || 'system') : 'system';
+          // Legacy name → Universal UI name migration table
+          var legacyMap = {
+            light: 'light-slate', dark: 'dark-slate', purple: 'dark-midnight',
+            'light-purple': 'light-midnight', midnight: 'dark-midnight'
+          };
+          if (legacyMap[theme]) theme = legacyMap[theme];
+
+          var resolved = theme;
+          if (theme === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark-slate' : 'light-slate';
+          }
+          document.documentElement.setAttribute('data-theme', resolved);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark-slate');
+        }
+      })();
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Inline splash shown until React replaces #root -->
+      <div class="app-splash"><span class="spinner"></span></div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

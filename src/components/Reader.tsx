@@ -2,14 +2,16 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { updateComicProgress } from '../utils/db';
 import type { ComicMetadata } from '../utils/db';
 import { getPageBlob, clearCBZCache } from '../utils/cbz';
-import { getPdfPageBlob, clearPDFCache } from '../utils/pdf';
+import { getPdfPageBlob, clearPDFCache, clearPdfPageCache } from '../utils/pdf';
 import type { ReaderSettings } from './Settings';
 import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X } from 'lucide-react';
 
 
 interface ReaderProps {
   comic: ComicMetadata;
-  fileBlob: Blob;
+  /** Required for PDF (pdf.js needs the document bytes). Unused for CBZ in
+   *  Tauri, where pages are streamed from disk one at a time. */
+  fileBlob: Blob | null;
   settings: ReaderSettings;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -19,15 +21,22 @@ interface ReaderProps {
 
 interface DynamicCoverImageProps {
   coverBlob: Blob | null;
+  /** Preferred source: a persisted data-URL string (survives IndexedDB). */
+  coverDataUrl?: string | null;
   title: string;
   className?: string;
   fallbackClassName?: string;
 }
 
-const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, title, className, fallbackClassName }) => {
+const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, coverDataUrl, title, className, fallbackClassName }) => {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    // Prefer the reliable data-URL; fall back to a transient object URL.
+    if (coverDataUrl) {
+      setCoverUrl(coverDataUrl);
+      return;
+    }
     if (coverBlob) {
       let url = '';
       try {
@@ -39,8 +48,10 @@ const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, title,
       return () => {
         if (url) URL.revokeObjectURL(url);
       };
+    } else {
+      setCoverUrl(null);
     }
-  }, [coverBlob]);
+  }, [coverDataUrl, coverBlob]);
 
   if (coverUrl) {
     return <img src={coverUrl} alt={title} className={className} />;
@@ -97,11 +108,12 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
           flexShrink: 0
         }}
       >
-        <DynamicCoverImage 
-          coverBlob={c.coverBlob} 
-          title={c.title} 
-          className="drawer-cover" 
-          fallbackClassName="drawer-cover-placeholder" 
+        <DynamicCoverImage
+          coverBlob={c.coverBlob}
+          coverDataUrl={c.coverDataUrl}
+          title={c.title}
+          className="drawer-cover"
+          fallbackClassName="drawer-cover-placeholder"
         />
         
         {progressPercent > 0 && (
@@ -118,7 +130,7 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             <div
               style={{
                 height: '100%',
-                backgroundColor: isCompleted ? '#4caf50' : 'var(--accent)', 
+                backgroundColor: isCompleted ? 'var(--success)' : 'var(--accent)',
                 width: `${Math.min(100, progressPercent)}%` 
               }}
             />
@@ -133,8 +145,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
         }}>
           {isCompleted ? (
             <span style={{
-              backgroundColor: '#4caf50',
-              color: '#ffffff',
+              backgroundColor: 'var(--success)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: 'bold',
               padding: '2px 6px',
@@ -143,8 +155,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             }}>✓</span>
           ) : isUnread ? (
             <span style={{
-              backgroundColor: '#aa3bff',
-              color: '#ffffff',
+              backgroundColor: 'var(--accent)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: 'bold',
               padding: '2px 6px',
@@ -153,8 +165,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             }}>Новый</span>
           ) : (
             <span style={{
-              backgroundColor: 'rgba(0, 0, 0, 0.75)',
-              color: '#ffffff',
+              backgroundColor: 'var(--bg-translucent)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: '600',
               padding: '2px 5px',
@@ -269,6 +281,85 @@ export const Reader: React.FC<ReaderProps> = ({
 
   const webtoonContainerRef = useRef<HTMLDivElement>(null);
 
+  // Fast Scroll Handle states (Webtoon mode)
+  const [isScrollingFastScroll, setIsScrollingFastScroll] = useState(false);
+  const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
+  const [fastScrollPct, setFastScrollPct] = useState(0); // 0 to 100
+  const fastScrollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const fastScrollTrackRef = useRef<HTMLDivElement>(null);
+
+  // Listen to scrolls on webtoonContainer
+  useEffect(() => {
+    const container = webtoonContainerRef.current;
+    if (!container || settings.mode !== 'webtoon' || settings.fastScrollPosition === 'disabled') return;
+
+    const handleScroll = () => {
+      const totalScrollable = container.scrollHeight - container.clientHeight;
+      if (totalScrollable <= 0) return;
+      const pct = (container.scrollTop / totalScrollable) * 100;
+      setFastScrollPct(pct);
+
+      setIsScrollingFastScroll(true);
+
+      if (fastScrollTimerRef.current) clearTimeout(fastScrollTimerRef.current);
+      fastScrollTimerRef.current = setTimeout(() => {
+        setIsScrollingFastScroll(false);
+      }, 1000);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (fastScrollTimerRef.current) clearTimeout(fastScrollTimerRef.current);
+    };
+  }, [settings.mode, settings.fastScrollPosition, webtoonContainerRef]);
+
+  // Pointer dragging handler for Fast Scroll handle
+  const handleFastScrollPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFastScroll(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    handleFastScrollDrag(e.clientY);
+  };
+
+  const handleFastScrollDrag = (clientY: number) => {
+    const track = fastScrollTrackRef.current;
+    const container = webtoonContainerRef.current;
+    if (!track || !container) return;
+
+    const rect = track.getBoundingClientRect();
+    const padding = 20;
+    const trackHeight = rect.height - padding * 2;
+    if (trackHeight <= 0) return;
+    const relativeY = Math.max(0, Math.min(trackHeight, clientY - rect.top - padding));
+    const pct = relativeY / trackHeight;
+
+    setFastScrollPct(pct * 100);
+
+    const totalScrollable = container.scrollHeight - container.clientHeight;
+    container.scrollTop = pct * totalScrollable;
+  };
+
+  const handleFastScrollPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingFastScroll) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handleFastScrollDrag(e.clientY);
+  };
+
+  const handleFastScrollPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFastScroll(false);
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    
+    if (fastScrollTimerRef.current) clearTimeout(fastScrollTimerRef.current);
+    fastScrollTimerRef.current = setTimeout(() => {
+      setIsScrollingFastScroll(false);
+    }, 1000);
+  };
+
   // Reset zoom & pan
   const resetZoom = useCallback(() => {
     setZoomScale(1);
@@ -278,11 +369,14 @@ export const Reader: React.FC<ReaderProps> = ({
   // Helper to fetch page Blob depending on format
   const fetchPageBlob = useCallback(async (index: number): Promise<Blob> => {
     if (comic.format === 'pdf') {
+      if (!fileBlob) throw new Error('PDF file blob is required for reading.');
       return await getPdfPageBlob(comic.id, fileBlob, index + 1);
     } else {
-      return await getPageBlob(comic.id, fileBlob, comic.pages[index]);
+      // CBZ in Tauri: `uri` is the absolute file path Rust reads from disk.
+      // `fileBlob` is only used on the web fallback path (JSZip).
+      return await getPageBlob(comic.uri, fileBlob, comic.pages[index]);
     }
-  }, [comic.id, comic.pages, comic.format, fileBlob]);
+  }, [comic.uri, comic.pages, comic.format, fileBlob]);
 
   // Prefetch adjacent page
   const prefetchNextPage = useCallback(async (nextIdx: number) => {
@@ -371,6 +465,7 @@ export const Reader: React.FC<ReaderProps> = ({
       if (nextPageUrl) URL.revokeObjectURL(nextPageUrl);
       clearCBZCache();
       clearPDFCache();
+      clearPdfPageCache();
     };
   }, [settings.mode]);
 
@@ -799,7 +894,7 @@ export const Reader: React.FC<ReaderProps> = ({
                 </button>
               </div>
             </div>
-            <div className="drawer-comic-list" style={{ flex: 1, overflowX: 'auto', padding: '16px 8px', display: 'flex', gap: '16px', scrollbarWidth: 'thin' }}>
+            <div className="drawer-comic-list" style={{ flex: 1, padding: '16px 8px' }}>
               {sortedShelfComics.map((c) => (
                 <DrawerComicCard
                   key={c.id}
@@ -823,7 +918,7 @@ export const Reader: React.FC<ReaderProps> = ({
         <div className="next-issue-overlay">
           <div className="next-issue-card">
             <span className="next-issue-badge">Выпуск прочитан!</span>
-            <DynamicCoverImage coverBlob={nextComic.coverBlob} title={nextComic.title} className="next-issue-cover" fallbackClassName="next-issue-cover-placeholder" />
+            <DynamicCoverImage coverBlob={nextComic.coverBlob} coverDataUrl={nextComic.coverDataUrl} title={nextComic.title} className="next-issue-cover" fallbackClassName="next-issue-cover-placeholder" />
             <h4 className="next-issue-title">Открыть следующий выпуск?</h4>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>{nextComic.title}</p>
             <div className="next-issue-actions">
@@ -845,6 +940,48 @@ export const Reader: React.FC<ReaderProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Fast Scroll Handle Track (Webtoon mode) */}
+      {settings.mode === 'webtoon' && settings.fastScrollPosition && settings.fastScrollPosition !== 'disabled' && (
+        <div 
+          ref={fastScrollTrackRef}
+          className={`fast-scroll-track ${isScrollingFastScroll || isDraggingFastScroll ? 'visible' : ''}`}
+          onPointerMove={handleFastScrollPointerMove}
+          onPointerUp={handleFastScrollPointerUp}
+          onPointerCancel={handleFastScrollPointerUp}
+          style={{
+            position: 'absolute',
+            top: '80px',
+            bottom: '100px',
+            [settings.fastScrollPosition]: '12px',
+            width: '24px',
+            zIndex: 110,
+            display: 'flex',
+            justifyContent: 'center',
+            opacity: isScrollingFastScroll || isDraggingFastScroll ? 0.7 : 0,
+            pointerEvents: isScrollingFastScroll || isDraggingFastScroll ? 'auto' : 'none',
+            transition: 'opacity 0.3s ease',
+          }}
+        >
+          <div
+            className="fast-scroll-handle"
+            onPointerDown={handleFastScrollPointerDown}
+            style={{
+              width: '8px',
+              height: '48px',
+              borderRadius: '4px',
+              backgroundColor: 'var(--text-primary)',
+              cursor: 'ns-resize',
+              position: 'absolute',
+              top: `calc(20px + ${fastScrollPct}% * (100% - 40px) / 100)`,
+              transform: 'translateY(-50%)',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+              transition: 'background-color 0.2s ease, transform 0.1s ease',
+              touchAction: 'none'
+            }}
+          />
         </div>
       )}
     </div>

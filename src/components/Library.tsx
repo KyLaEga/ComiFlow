@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { VirtuosoGrid } from 'react-virtuoso';
 import type { ComicMetadata, Shelf } from '../utils/db';
-import { BookOpen, Plus, Search, Trash2, FolderOpen, AlertTriangle } from 'lucide-react';
+import { BookOpen, Plus, Search, Trash2, FolderOpen, AlertTriangle, FileWarning } from 'lucide-react';
+import { LibraryScroller } from './LibraryScroller';
+import { confirmDialog } from '../utils/nativeBridge';
 
 
 interface LibraryProps {
@@ -50,6 +52,13 @@ const ComicCard: React.FC<ComicCardProps> = ({
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    // Prefer the persisted data-URL (reliably survives IndexedDB round-trips).
+    if (comic.coverDataUrl) {
+      setCoverUrl(comic.coverDataUrl);
+      return;
+    }
+    // Fallback: build an object URL from the Blob (works while the record is
+    // fresh in memory, e.g. just imported).
     if (comic.coverBlob) {
       let url = '';
       try {
@@ -63,8 +72,10 @@ const ComicCard: React.FC<ComicCardProps> = ({
           URL.revokeObjectURL(url);
         }
       };
+    } else {
+      setCoverUrl(null);
     }
-  }, [comic.coverBlob]);
+  }, [comic.coverDataUrl, comic.coverBlob]);
 
   const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
 
@@ -74,9 +85,9 @@ const ComicCard: React.FC<ComicCardProps> = ({
       <div className="card-actions-overlay">
         <button
           className="card-btn-delete"
-          onClick={(e) => {
+          onClick={async (e) => {
             e.stopPropagation();
-            if (window.confirm(`Удалить комикс "${comic.title}"?`)) {
+            if (await confirmDialog(`Удалить комикс "${comic.title}"?`, 'Удаление')) {
               onDeleteComic(comic.id);
             }
           }}
@@ -118,7 +129,22 @@ const ComicCard: React.FC<ComicCardProps> = ({
             alt={comic.title}
             className="card-cover"
             loading="lazy"
+            onError={() => {
+              // Diagnostic: surface why an <img> with a data-URL fails.
+              console.error('[ComicCard] img onError', comic.id, {
+                coverUrlStart: coverUrl?.slice(0, 40),
+              });
+            }}
           />
+        ) : comic.metadataError ? (
+          // Broken / not-a-comic file: show a clear marker instead of an
+          // endless "loading" spinner card.
+          <div className="empty-cover-placeholder" title={comic.metadataError}>
+            <FileWarning size={40} style={{ color: 'var(--danger)' }} />
+            <span style={{ fontSize: '10px', marginTop: '6px', color: 'var(--text-muted)', textAlign: 'center', padding: '0 8px' }}>
+              {comic.metadataError}
+            </span>
+          </div>
         ) : (
           <div className="empty-cover-placeholder">
             <BookOpen size={48} />
@@ -141,13 +167,17 @@ const ComicCard: React.FC<ComicCardProps> = ({
 
       {/* Details Section */}
       <div className="card-details">
-        <h4 
-          className="card-title" 
+        <h4
+          className="card-title"
           onClick={() => handleCardClick(comic.id)}
           title={comic.title}
         >
           {comic.title}
         </h4>
+        {/* TEMP diagnostic badge — remove after fixing covers */}
+        <span style={{ fontSize: '8px', color: 'var(--text-muted)', display: 'block', marginBottom: '2px' }}>
+          {comic.coverDataUrl ? `data:${comic.coverDataUrl.length}` : comic.coverBlob ? `blob:${comic.coverBlob.size}` : 'NO-COVER'} | {comic.format} | {comic.pages?.length ?? 0}p
+        </span>
         <div className="card-meta">
           <span>{comic.totalPages} стр.</span>
           <span>{formatBytes(comic.size)}</span>
@@ -204,6 +234,25 @@ export const Library: React.FC<LibraryProps> = ({
   const [filterStatus, setFilterStatus] = useState<'all' | 'unread' | 'read'>(() => {
     return (localStorage.getItem('comiflow_filter_status') as any) || 'all';
   });
+  // Inline shelf creation (window.prompt is unreliable in Tauri webview).
+  const [isAddingShelf, setIsAddingShelf] = useState(false);
+  const [newShelfName, setNewShelfName] = useState('');
+  const newShelfInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isAddingShelf) {
+      newShelfInputRef.current?.focus();
+    }
+  }, [isAddingShelf]);
+
+  const submitNewShelf = () => {
+    const name = newShelfName.trim();
+    setIsAddingShelf(false);
+    setNewShelfName('');
+    if (name) {
+      onAddShelf(name);
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('comiflow_sort_by', sortBy);
@@ -338,7 +387,7 @@ export const Library: React.FC<LibraryProps> = ({
           type="file"
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept=".cbz,.zip,.pdf"
+          accept=".cbz,.pdf"
           multiple
           style={{ display: 'none' }}
         />
@@ -403,9 +452,9 @@ export const Library: React.FC<LibraryProps> = ({
             {shelf.name}
             <span
               className="btn-delete-shelf"
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.stopPropagation();
-                if (window.confirm(`Удалить полку "${shelf.name}"? Книги не будут удалены.`)) {
+                if (await confirmDialog(`Удалить полку "${shelf.name}"? Книги не будут удалены.`, 'Удаление полки')) {
                   onDeleteShelf(shelf.id);
                   if (activeShelfId === shelf.id) {
                     setActiveShelfId(null);
@@ -418,17 +467,47 @@ export const Library: React.FC<LibraryProps> = ({
             </span>
           </button>
         ))}
-        <button
-          className="shelf-tab-btn shelf-tab-btn-add"
-          onClick={() => {
-            const name = prompt('Введите название новой полки:');
-            if (name && name.trim()) {
-              onAddShelf(name.trim());
-            }
-          }}
-        >
-          <Plus size={14} /> Новая полка
-        </button>
+        {isAddingShelf ? (
+          <input
+            ref={newShelfInputRef}
+            type="text"
+            value={newShelfName}
+            onChange={(e) => setNewShelfName(e.target.value)}
+            onBlur={submitNewShelf}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                submitNewShelf();
+              } else if (e.key === 'Escape') {
+                setIsAddingShelf(false);
+                setNewShelfName('');
+              }
+            }}
+            placeholder="Название полки…"
+            className="shelf-tab-input"
+            style={{
+              padding: '8px 12px',
+              fontSize: '13px',
+              borderRadius: '20px',
+              border: '1px solid var(--accent)',
+              backgroundColor: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              outline: 'none',
+              whiteSpace: 'nowrap',
+              minWidth: '140px',
+            }}
+          />
+        ) : (
+          <button
+            className="shelf-tab-btn shelf-tab-btn-add"
+            onClick={() => {
+              setIsAddingShelf(true);
+              setNewShelfName('');
+            }}
+          >
+            <Plus size={14} /> Новая полка
+          </button>
+        )}
       </div>
 
       {/* Library Controls */}
@@ -589,10 +668,14 @@ export const Library: React.FC<LibraryProps> = ({
             Ваша библиотека пуста
           </h2>
           <p style={{ maxWidth: '400px', margin: '0 auto', fontSize: '15px' }}>
-            Загрузите свои любимые комиксы, мангу или книги в формате .cbz, .zip или .pdf, чтобы начать чтение.
+            Загрузите свои любимые комиксы, мангу или книги в формате .cbz или .pdf, чтобы начать чтение.
           </p>
         </div>
       )}
+
+      {/* Fast-scroll handle: lets the user jump through a large catalog with
+          a single drag instead of scrolling for seconds. */}
+      <LibraryScroller itemCount={sortedComics.length} />
 
       {/* Loading Overlay for Imports */}
       {isImporting && (

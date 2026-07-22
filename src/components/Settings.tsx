@@ -1,8 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2 } from 'lucide-react';
+import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2, ArrowUpDown } from 'lucide-react';
+import { confirmDialog } from '../utils/nativeBridge';
 
 export interface ReaderSettings {
-  theme: 'light' | 'dark' | 'dracula' | 'nord' | 'tokyo' | 'oled-black' | 'oled-dracula' | 'oled-tokyo' | 'oled-one-dark' | 'oled-evergreen' | 'one-dark' | 'system';
+  theme: 'light-slate' | 'dark-slate' | 'oled-slate' | 
+         'light-nord' | 'dark-nord' | 'oled-nord' | 
+         'light-midnight' | 'dark-midnight' | 'oled-midnight' | 
+         'light-dracula' | 'dark-dracula' | 'oled-dracula' | 
+         'light-sepia' | 'dark-sepia' | 'oled-sepia' | 
+         'light-evergreen' | 'dark-evergreen' | 'oled-evergreen' | 
+         'light-amber' | 'dark-amber' | 'oled-amber' | 
+         'light-sakura' | 'dark-sakura' | 'oled-sakura' | 
+         'light-cyberpunk' | 'dark-cyberpunk' | 'oled-cyberpunk' | 
+         'system';
   direction: 'ltr' | 'rtl';
   mode: 'paged' | 'webtoon';
   fitMode: 'contain' | 'width' | 'height';
@@ -11,8 +21,38 @@ export interface ReaderSettings {
   volumeKeysEnabled: boolean;
   brightness: number; // 50 to 150
   contrast: number; // 50 to 150
-  deletePhysicalFile?: boolean;
+  deletePhysicalFile?: boolean; // legacy, migrated to deleteMode
+  deleteMode?: 'off' | 'trash' | 'permanent';
+  fastScrollPosition?: 'left' | 'right' | 'disabled';
 }
+
+const formatLibraryPath = (uri: string | null): string => {
+  if (!uri) return '';
+  try {
+    const decoded = decodeURIComponent(uri);
+    // Desktop (Tauri): the URI is already a full filesystem path — show it as-is.
+    if (!decoded.startsWith('content://')) {
+      return decoded;
+    }
+    // Android SAF: content://.../tree/primary:Path/To/Folder → /storage/emulated/0/Path/To/Folder
+    const match = decoded.match(/(?:tree|document)\/([^/]+)/);
+    if (match) {
+      const pathPart = match[1];
+      if (pathPart.includes(':')) {
+        const [storage, ...pathSegments] = pathPart.split(':');
+        const path = pathSegments.join(':');
+        if (storage === 'primary') {
+          return `/storage/emulated/0/${path}`;
+        }
+        return `/storage/${storage}/${path}`;
+      }
+      return pathPart;
+    }
+    return decoded;
+  } catch (e) {
+    return uri;
+  }
+};
 
 interface SettingsProps {
   isOpen: boolean;
@@ -86,13 +126,7 @@ export const Settings: React.FC<SettingsProps> = ({
             <div style={{ padding: '12px', marginBottom: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>Выбранная папка:</div>
               <div style={{ fontSize: '14px', fontFamily: 'monospace', color: 'var(--text-primary)', wordBreak: 'break-all' }}>
-                {(() => {
-                  try {
-                    return decodeURIComponent(libraryFolderUri).split('/').pop();
-                  } catch (e) {
-                    return libraryFolderUri.split('/').pop() || libraryFolderUri;
-                  }
-                })()}
+                {formatLibraryPath(libraryFolderUri)}
               </div>
             </div>
           )}
@@ -123,8 +157,8 @@ export const Settings: React.FC<SettingsProps> = ({
             </button>
 
             <button
-              onClick={() => {
-                if (window.confirm('Вы уверены, что хотите удалить базу данных и отвязать папку? Файлы на устройстве останутся.')) {
+              onClick={async () => {
+                if (await confirmDialog('Вы уверены, что хотите удалить базу данных и отвязать папку? Файлы на устройстве останутся.', 'Очистка базы данных')) {
                   onClearLibrary();
                   onClose();
                 }
@@ -162,17 +196,33 @@ export const Settings: React.FC<SettingsProps> = ({
             }}
           >
             <option value="system">Авто (Системная)</option>
-            <option value="light">Светлая</option>
-            <option value="dark">Темная</option>
-            <option value="dracula">Dracula</option>
-            <option value="nord">Nord</option>
-            <option value="tokyo">Tokyo</option>
-            <option value="one-dark">One Dark</option>
-            <option value="oled-black">OLED Black</option>
+            <option value="light-slate">Светлый сланец (Slate)</option>
+            <option value="dark-slate">Тёмный сланец (Slate)</option>
+            <option value="oled-slate">OLED сланец (Slate)</option>
+            <option value="light-nord">Светлый Nord</option>
+            <option value="dark-nord">Тёмный Nord</option>
+            <option value="oled-nord">OLED Nord</option>
+            <option value="light-midnight">Светлый Токио (Midnight)</option>
+            <option value="dark-midnight">Тёмный Токио (Midnight)</option>
+            <option value="oled-midnight">OLED Токио (Midnight)</option>
+            <option value="light-dracula">Светлый Dracula</option>
+            <option value="dark-dracula">Тёмный Dracula</option>
             <option value="oled-dracula">OLED Dracula</option>
-            <option value="oled-tokyo">OLED Tokyo</option>
-            <option value="oled-one-dark">OLED One Dark</option>
+            <option value="light-sepia">Светлая сепия</option>
+            <option value="dark-sepia">Тёмная сепия</option>
+            <option value="oled-sepia">OLED сепия</option>
+            <option value="light-evergreen">Светлый Evergreen</option>
+            <option value="dark-evergreen">Тёмный Evergreen</option>
             <option value="oled-evergreen">OLED Evergreen</option>
+            <option value="light-amber">Светлый янтарь (Amber)</option>
+            <option value="dark-amber">Тёмный янтарь (Amber)</option>
+            <option value="oled-amber">OLED янтарь (Amber)</option>
+            <option value="light-sakura">Светлая сакура (Sakura)</option>
+            <option value="dark-sakura">Тёмная сакура (Sakura)</option>
+            <option value="oled-sakura">OLED сакура (Sakura)</option>
+            <option value="light-cyberpunk">Светлый киберпанк</option>
+            <option value="dark-cyberpunk">Тёмный киберпанк</option>
+            <option value="oled-cyberpunk">OLED киберпанк</option>
           </select>
         </div>
 
@@ -221,6 +271,37 @@ export const Settings: React.FC<SettingsProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Fast Scroll Handle Position (Only for Webtoon Mode) */}
+        {settings.mode === 'webtoon' && (
+          <div className="settings-section">
+            <span className="settings-section-title">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                <ArrowUpDown size={14} /> Быстрая прокрутка (ползунок)
+              </span>
+            </span>
+            <div className="segmented-control">
+              <button
+                className={`segmented-btn ${settings.fastScrollPosition === 'left' ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ fastScrollPosition: 'left' })}
+              >
+                Слева
+              </button>
+              <button
+                className={`segmented-btn ${settings.fastScrollPosition === 'right' ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ fastScrollPosition: 'right' })}
+              >
+                Справа
+              </button>
+              <button
+                className={`segmented-btn ${settings.fastScrollPosition === 'disabled' || !settings.fastScrollPosition ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ fastScrollPosition: 'disabled' })}
+              >
+                Отключена
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Page Fitting (Only for Paged Mode) */}
         {settings.mode === 'paged' && (
@@ -338,16 +419,26 @@ export const Settings: React.FC<SettingsProps> = ({
 
           <div className="settings-option-row">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
-              <Trash2 size={16} /> Удалять файлы с устройства
+              <Trash2 size={16} /> Удаление файлов с устройства
             </span>
-            <label className="switch-control">
-              <input
-                type="checkbox"
-                checked={settings.deletePhysicalFile || false}
-                onChange={(e) => onUpdateSettings({ deletePhysicalFile: e.target.checked })}
-              />
-              <span className="switch-slider"></span>
-            </label>
+            <select
+              value={settings.deleteMode || 'off'}
+              onChange={(e) => onUpdateSettings({ deleteMode: e.target.value as 'off' | 'trash' | 'permanent' })}
+              style={{
+                padding: '8px 12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                outline: 'none',
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="off">Не удалять (только из библиотеки)</option>
+              <option value="trash">В корзину (можно восстановить)</option>
+              <option value="permanent">Безвозвратно</option>
+            </select>
           </div>
         </div>
       </div>

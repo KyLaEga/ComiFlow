@@ -1,6 +1,16 @@
 import localforage from 'localforage';
 import { resizeCover } from './image';
 
+/** Convert a Blob to a data-URL string via FileReader. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 // Define the structure of comic metadata
 export interface ComicMetadata {
   id: string;
@@ -12,10 +22,22 @@ export interface ComicMetadata {
   totalPages: number;
   pages: string[]; // List of file names inside the zip (sorted)
   coverUrl?: string; // Temporarily created Object URL for rendering
-  coverBlob: Blob | null; // Saved Blob of the first page
+  coverBlob: Blob | null; // Saved Blob of the first page (used by Reader)
+  /**
+   * Same cover as a data URL string. IndexedDB reliably round-trips strings
+   * (unlike Blobs in some webviews), so the library grid uses this directly
+   * as <img src> — no createObjectURL / revocation timing issues.
+   */
+  coverDataUrl?: string | null;
   format?: 'cbz' | 'pdf'; // File format
   uri: string; // Native SAF URI pointing to the file
   shelfId?: string | null; // Shelf ID this comic belongs to
+  /**
+   * Set when metadata extraction failed or the file is empty/not a comic.
+   * Prevents the background loader from retrying the same broken file
+   * forever (which would spin-loop and freeze the UI).
+   */
+  metadataError?: string | null;
 }
 
 // Stores
@@ -42,19 +64,42 @@ export const initDb = () => {
 initDb();
 
 /**
- * Background migration to compress previously saved bloated covers
+ * Background migration:
+ *  1. Compress previously saved bloated covers.
+ *  2. Backfill `coverDataUrl` for records that only have a `coverBlob`, so the
+ *     library grid can render reliably (Blobs can come back broken from
+ *     IndexedDB after a structured clone in some webviews — strings cannot).
  */
 export async function migrateCovers(): Promise<void> {
   try {
     const keys = await metadataStore.keys();
     for (const key of keys) {
       const value = await metadataStore.getItem<ComicMetadata>(key);
-      if (value && value.coverBlob && value.coverBlob.size > 120 * 1024) {
+      if (!value) continue;
+
+      let changed = false;
+
+      // 1. Compress oversized covers.
+      if (value.coverBlob && value.coverBlob.size > 120 * 1024) {
         const compressed = await resizeCover(value.coverBlob);
         if (compressed.size < value.coverBlob.size) {
           value.coverBlob = compressed;
-          await metadataStore.setItem(key, value);
+          changed = true;
         }
+      }
+
+      // 2. Backfill coverDataUrl if missing but a cover Blob exists.
+      if (!value.coverDataUrl && value.coverBlob) {
+        try {
+          value.coverDataUrl = await blobToDataUrl(value.coverBlob);
+          changed = true;
+        } catch {
+          /* ignore single-record failure */
+        }
+      }
+
+      if (changed) {
+        await metadataStore.setItem(key, value);
       }
     }
   } catch (err) {
@@ -86,24 +131,47 @@ export async function saveComic(
   coverBlob: Blob | null,
   uri: string,
   format: 'cbz' | 'pdf',
-  shelfId: string | null = null
+  shelfId: string | null = null,
+  metadataError: string | null = null
 ): Promise<ComicMetadata> {
-  // Compress and resize the cover image to prevent DB storage bloat
-  const compressedCover = coverBlob ? await resizeCover(coverBlob) : null;
+  // Preserve immutable identity/progress fields when updating an existing comic
+  // (otherwise re-saving metadata during lazy-load would wipe reading progress
+  // and reset the sort order).
+  const existing = await metadataStore.getItem<ComicMetadata>(id).catch(() => null);
+
+  // Compress and resize the cover image to prevent DB storage bloat.
+  // Keep the existing cover if the caller passed null but we already had one
+  // (e.g. a progress-only update should not erase the cover).
+  const incomingCover = coverBlob ?? existing?.coverBlob ?? null;
+  const compressedCover = incomingCover ? await resizeCover(incomingCover) : null;
+
+  // Persist the cover also as a data-URL string. IndexedDB round-trips strings
+  // reliably across webviews (Blobs can come back null/broken after a clone),
+  // so the library grid renders directly from this string.
+  let coverDataUrl: string | null = existing?.coverDataUrl ?? null;
+  if (compressedCover) {
+    try {
+      coverDataUrl = await blobToDataUrl(compressedCover);
+    } catch {
+      // keep previous data url if conversion fails
+    }
+  }
 
   const metadata: ComicMetadata = {
     id,
     title,
     size,
-    addedAt: Date.now(),
-    lastReadAt: null,
-    currentPage: 0,
-    totalPages: pages.length,
-    pages,
+    addedAt: existing?.addedAt ?? Date.now(),
+    lastReadAt: existing?.lastReadAt ?? null,
+    currentPage: existing?.currentPage ?? 0,
+    totalPages: pages.length > 0 ? pages.length : (existing?.totalPages ?? 0),
+    pages: pages.length > 0 ? pages : (existing?.pages ?? []),
     coverBlob: compressedCover,
+    coverDataUrl,
     format,
     uri,
     shelfId,
+    metadataError,
   };
 
   // Save metadata

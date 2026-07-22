@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { App as CapacitorApp } from '@capacitor/app';
 import { Library } from './components/Library';
 import type { ReaderSettings } from './components/Settings';
-import { 
-  getAllComics, 
-  deleteComic, 
-  saveComic, 
+import {
+  getAllComics,
+  deleteComic,
+  saveComic,
   initDb,
   getAllShelves,
   saveShelf,
@@ -15,6 +14,21 @@ import {
 } from './utils/db';
 import type { ComicMetadata, Shelf } from './utils/db';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
+import {
+  isTauri,
+  selectLibraryFolder as bridgeSelectLibraryFolder,
+  listLibraryFiles,
+  getComicMetadataNative,
+  deleteSAFFile,
+  importFileToLibrary,
+  clearImportCache,
+  setVolumeKeysEnabled,
+  getPendingFileUri,
+  getFileSrc,
+  confirmDialog,
+  messageDialog,
+} from './utils/nativeBridge';
+import { base64ToBlob } from './utils/pageUtils';
 
 import { Reader } from './components/Reader';
 import { Settings } from './components/Settings';
@@ -23,25 +37,37 @@ import './App.css';
 
 const LOCAL_STORAGE_KEY = 'comiflow_settings';
 
-const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return window.btoa(binary);
+/** All valid Universal UI theme ids (kept in sync with universal-themes.css). */
+const VALID_THEMES = new Set<ReaderSettings['theme']>([
+  'system',
+  'light-slate', 'dark-slate', 'oled-slate',
+  'light-nord', 'dark-nord', 'oled-nord',
+  'light-midnight', 'dark-midnight', 'oled-midnight',
+  'light-dracula', 'dark-dracula', 'oled-dracula',
+  'light-sepia', 'dark-sepia', 'oled-sepia',
+  'light-evergreen', 'dark-evergreen', 'oled-evergreen',
+  'light-amber', 'dark-amber', 'oled-amber',
+  'light-sakura', 'dark-sakura', 'oled-sakura',
+  'light-cyberpunk', 'dark-cyberpunk', 'oled-cyberpunk',
+]);
+
+/** Map legacy (pre-Universal-UI) theme names to current ones. */
+const LEGACY_THEME_MAP: Record<string, ReaderSettings['theme']> = {
+  light: 'light-slate',
+  dark: 'dark-slate',
+  purple: 'dark-midnight',
+  'light-purple': 'light-midnight',
+  midnight: 'dark-midnight',
+  oled: 'oled-slate',
 };
 
-const base64ToBlob = (base64: string, mimeType: string): Blob => {
-  const byteCharacters = atob(base64);
-  const byteNumbers = new Array(byteCharacters.length);
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
-  const byteArray = new Uint8Array(byteNumbers);
-  return new Blob([byteArray], { type: mimeType });
-};
+/** Validate / migrate a stored theme value; falls back to 'system'. */
+function normalizeTheme(raw: unknown): ReaderSettings['theme'] {
+  if (typeof raw !== 'string') return 'system';
+  if (VALID_THEMES.has(raw as ReaderSettings['theme'])) return raw as ReaderSettings['theme'];
+  if (LEGACY_THEME_MAP[raw]) return LEGACY_THEME_MAP[raw];
+  return 'system';
+}
 
 const DEFAULT_SETTINGS: ReaderSettings = {
   theme: 'system',
@@ -53,43 +79,40 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   volumeKeysEnabled: false,
   brightness: 100,
   contrast: 100,
-  deletePhysicalFile: false,
+  deleteMode: 'off',
+  fastScrollPosition: 'right',
 };
 
-const updateNativeVolumeKeysState = (enabled: boolean) => {
-  const bridge = (window as any).ComiFlowBridge;
-  if (bridge && typeof bridge.setVolumeKeysEnabled === 'function') {
-    try {
-      bridge.setVolumeKeysEnabled(enabled);
-    } catch (e) {
-      console.error('Failed to communicate volume key setting to native bridge:', e);
-    }
-  }
-};
+// Persisted library folder (Tauri desktop) so it survives restarts.
+const FOLDER_STORAGE_KEY = 'comiflow_library_folder';
+
+const getStoredFolder = (): string | null => localStorage.getItem(FOLDER_STORAGE_KEY);
+const setStoredFolder = (uri: string) => localStorage.setItem(FOLDER_STORAGE_KEY, uri);
 
 function App() {
+  const [isInitializing, setIsInitializing] = useState(true);
   const [libraryFolderUri, setLibraryFolderUri] = useState<string | null>(null);
   const [comics, setComics] = useState<ComicMetadata[]>([]);
   const [activeComicId, setActiveComicId] = useState<string | null>(null);
   const [activeComicFile, setActiveComicFile] = useState<Blob | null>(null);
-  
+
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState('');
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  
+
   const [pendingFiles, setPendingFiles] = useState<FileList | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importTargetShelfId, setImportTargetShelfId] = useState<string | null>(null);
-  
+
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS);
   const [shelves, setShelves] = useState<Shelf[]>([]);
   const [activeShelfId, setActiveShelfId] = useState<string | null>(null);
-  
+
   const libraryScrollYRef = useRef<number>(0);
 
-  // Keep refs for the backButton listener to avoid re-binding it
+  // Keep refs for the hardware back handler to avoid re-binding it
   const activeComicIdRef = useRef<string | null>(null);
   const isSettingsOpenRef = useRef<boolean>(false);
   const isSelectModeRef = useRef<boolean>(false);
@@ -106,247 +129,149 @@ function App() {
     isSelectModeRef.current = isSelectMode;
   }, [isSelectMode]);
 
-  // Handle hardware back button
+  // Hardware back button (Tauri Android). Handled via the app event plugin if available.
   useEffect(() => {
-    let backSub: any = null;
-    CapacitorApp.addListener('backButton', () => {
+    const onBackButton = () => {
       if (activeComicIdRef.current) {
-        // If comic is open, close it
         setActiveComicId(null);
         setActiveComicFile(null);
-        
         requestAnimationFrame(() => {
           window.scrollTo(0, libraryScrollYRef.current);
         });
-
-        // Clear import cache immediately
-        const bridge = (window as any).ComiFlowBridge;
-        if (bridge && typeof bridge.clearImportCache === 'function') {
-          bridge.clearImportCache();
-        }
-
-        // Refresh progress state in library listing
-        getAllComics().then((list) => {
-          setComics(list);
-        });
+        clearImportCache();
+        getAllComics().then((list) => setComics(list));
       } else if (isSettingsOpenRef.current) {
-        // If settings panel is open, close it
         setIsSettingsOpen(false);
       } else if (isSelectModeRef.current) {
-        // If items selection mode is active, exit select mode
         setIsSelectMode(false);
-      } else {
-        // Otherwise exit app
-        CapacitorApp.exitApp();
-      }
-    }).then(sub => {
-      backSub = sub;
-    });
-
-    return () => {
-      if (backSub) {
-        backSub.remove();
+      } else if (isTauri()) {
+        // Exit only on native; on web do nothing.
+        window.close();
       }
     };
+    window.addEventListener('comiflow:backbutton', onBackButton);
+    return () => window.removeEventListener('comiflow:backbutton', onBackButton);
   }, []);
 
-  // Open file from Android content:// URI
-  const handleOpenFileFromUri = async (uri: string) => {
-    const bridge = (window as any).ComiFlowBridge;
-    if (bridge && typeof bridge.copyContentUriToCache === 'function') {
-      const nativePath = bridge.copyContentUriToCache(uri);
-      if (nativePath) {
-        await handleOpenFileFromNativePath(nativePath);
-      } else {
-        alert('Не удалось получить доступ к файлу на устройстве.');
-      }
-    }
-  };
-
-  // Open file from native path (Capacitor local file URL)
-  const handleOpenFileFromNativePath = async (nativePath: string) => {
+  // Open file from a path (Tauri) — used for file-association intents.
+  const handleOpenFileFromPath = async (filePath: string) => {
     if (!libraryFolderUri) {
-      alert('Сначала выберите папку библиотеки, чтобы открывать файлы извне.');
+      await messageDialog('Сначала выберите папку библиотеки, чтобы открывать файлы извне.');
       return;
     }
-    
+
     setIsImporting(true);
     setImportProgress('Добавление файла в библиотеку...');
     try {
-      const baseName = nativePath.split('/').pop() || 'imported_file';
-      const cleanName = baseName.replace(/^open_\d+_/, '');
-      
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.importFileToLibrary === 'function') {
-         bridge.importFileToLibrary(nativePath, cleanName, libraryFolderUri);
-         await syncLibrary(libraryFolderUri);
-         
-         const list = await getAllComics();
-         setComics(list);
-         
-         // Find the newly added comic
-         const newComic = list.find(c => c.title === cleanName || c.uri.includes(cleanName));
-         if (newComic) {
-           await handleSelectComic(newComic.id);
-         }
+      const cleanName = filePath.split(/[/\\]/).pop() || 'imported_file';
+
+      const ok = await importFileToLibrary(filePath, cleanName, libraryFolderUri);
+      if (ok) {
+        await syncLibrary(libraryFolderUri);
+
+        const list = await getAllComics();
+        setComics(list);
+
+        // Find the newly added comic
+        const newComic = list.find(c => c.title === cleanName || c.uri.includes(cleanName));
+        if (newComic) {
+          await handleSelectComic(newComic.id);
+        }
+      } else {
+        await messageDialog('Не удалось скопировать файл в библиотеку.');
       }
     } catch (err) {
-      console.error('Failed to open file from native path:', err);
-      alert(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+      console.error('Failed to open file from path:', err);
+      await messageDialog(`Не удалось открыть файл: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
     } finally {
       setIsImporting(false);
       setImportProgress('');
     }
   };
 
-  // Helper to parse and save a single file during sync
-  const parseAndSaveNewComic = async (
-    file: File | Blob, 
-    originalName: string, 
-    isPdf: boolean, 
-    uri: string,
-    shelfId: string | null
-  ) => {
-    try {
-      const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-      
-      if (isPdf) {
-        setImportProgress(`Обработка PDF "${originalName}"...`);
-        const { parsePDF } = await import('./utils/pdf');
-        const parsed = await parsePDF(file as File, originalName);
-        const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
-        await saveComic(id, parsed.title, file.size, pages, parsed.coverBlob, uri, 'pdf', shelfId);
-      } else {
-        setImportProgress(`Распаковка "${originalName}"...`);
-        const { parseCBZ } = await import('./utils/cbz');
-        const parsed = await parseCBZ(file, originalName);
-
-        if (parsed.type === 'collection') {
-          setImportProgress(`Вложенные архивы временно не поддерживаются в SAF-режиме.`);
-          await new Promise(r => setTimeout(r, 2000));
-        } else {
-          setImportProgress(`Сохранение "${originalName}"...`);
-          await saveComic(id, parsed.title, file.size, parsed.pages, parsed.coverBlob, uri, 'cbz', shelfId);
-        }
-      }
-    } catch (err) {
-      console.error(`Error importing file ${originalName}:`, err);
-      const errMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
-      const isCorruptedZip = errMsg.toLowerCase().includes("can't find end of central directory");
-      const userFriendlyMsg = isCorruptedZip 
-        ? `Архив повреждён или имеет неподдерживаемый формат.`
-        : errMsg;
-      setImportProgress(`Ошибка: ${originalName} - ${userFriendlyMsg}`);
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  };
-
-  // Sync SAF library
+  // Sync library folder (Tauri: native metadata extraction)
   const syncLibrary = async (folderUri: string, silent: boolean = false) => {
     if (!silent) {
       setIsImporting(true);
       setImportProgress('Синхронизация библиотеки...');
     }
     try {
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.listLibraryFiles === 'function') {
-        const filesJson = bridge.listLibraryFiles(folderUri);
-        const safFiles = JSON.parse(filesJson);
-        
-        const existingComics = await getAllComics();
-        const existingUris = new Set(existingComics.map(c => c.uri));
-        
-        // Find deleted files
-        const safUris = new Set(safFiles.map((f: any) => f.uri));
-        let deletedCount = 0;
-        for (const comic of existingComics) {
-          if (!safUris.has(comic.uri)) {
-             await deleteComic(comic.id);
-             deletedCount++;
-          }
-        }
-        
-        // Find new files
-        let importedCount = 0;
-        let currentShelves = [...shelves];
-        let shelvesUpdated = false;
+      console.log('[sync] start, folder:', folderUri);
+      const safFiles = await listLibraryFiles(folderUri);
+      console.log('[sync] files found:', safFiles.length);
 
-        for (const file of safFiles) {
-          if (!existingUris.has(file.uri)) {
-             let targetShelfId = null;
-             
-             // Auto-create shelf if file is in a subfolder
-             if (file.shelfName && file.shelfName.trim() !== '') {
-               const shelfName = file.shelfName.trim();
-               let existingShelf = currentShelves.find(s => s.name === shelfName);
-               if (!existingShelf) {
-                 if (!silent) setImportProgress(`Создание полки "${shelfName}"...`);
-                 const newShelfId = `shelf_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-                 existingShelf = await saveShelf(newShelfId, shelfName);
-                 currentShelves.push(existingShelf);
-                 shelvesUpdated = true;
-               }
-               targetShelfId = existingShelf.id;
-             }
-             if (typeof bridge.getComicMetadataNative === 'function') {
-                if (!silent) setImportProgress(`Добавление ${file.name}...`);
-                const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-                const isPdf = file.name.toLowerCase().endsWith('.pdf');
-                const format = isPdf ? 'pdf' : 'cbz';
-                const title = file.name.replace(/\.[^/.]+$/, "");
-                await saveComic(id, title, file.size, [], null, file.uri, format, targetShelfId);
-                importedCount++;
-             } else {
-               if (!silent) setImportProgress(`Чтение нового файла: ${file.name}...`);
-               // Copy to cache to parse (Legacy fallback)
-               const nativePath = bridge.copyContentUriToCache(file.uri);
-               if (nativePath) {
-                 const capUrl = (window as any).Capacitor 
-                   ? (window as any).Capacitor.convertFileSrc(nativePath)
-                   : `http://localhost/_capacitor_file_${nativePath}`;
-                 
-                 const res = await fetch(capUrl);
-                 if (res.ok) {
-                   const blob = await res.blob();
-                   const fObj = new File([blob], file.name, { type: blob.type });
-                   const lowerName = file.name.toLowerCase();
-                   const isPdf = lowerName.endsWith('.pdf');
-                   await parseAndSaveNewComic(fObj, file.name, isPdf, file.uri, targetShelfId);
-                   importedCount++;
-                 }
-               }
-             }
-          }
-        }
-        
-        // Clean up empty shelves
-        const finalComics = await getAllComics();
-        const usedShelfIds = new Set(finalComics.map(c => c.shelfId).filter(id => id));
-        let shelvesDeleted = false;
-        for (const shelf of currentShelves) {
-          if (!usedShelfIds.has(shelf.id)) {
-            await deleteShelf(shelf.id);
-            shelvesDeleted = true;
-          }
-        }
+      const existingComics = await getAllComics();
+      const existingUris = new Set(existingComics.map(c => c.uri));
 
-        if (shelvesUpdated || shelvesDeleted) {
-          const updatedShelvesList = await getAllShelves();
-          setShelves(updatedShelvesList);
+      // Find deleted files
+      const safUris = new Set(safFiles.map(f => f.uri));
+      let deletedCount = 0;
+      for (const comic of existingComics) {
+        if (!safUris.has(comic.uri)) {
+          await deleteComic(comic.id);
+          deletedCount++;
         }
-        
-        if (deletedCount > 0 || importedCount > 0) {
-          setComics(finalComics);
+      }
+
+      // Find new files
+      let importedCount = 0;
+      let currentShelves = [...shelves];
+      let shelvesUpdated = false;
+
+      for (const file of safFiles) {
+        if (!existingUris.has(file.uri)) {
+          let targetShelfId = null;
+
+          // Auto-create shelf if file is in a subfolder
+          if (file.shelfName && file.shelfName.trim() !== '') {
+            const shelfName = file.shelfName.trim();
+            let existingShelf = currentShelves.find(s => s.name === shelfName);
+            if (!existingShelf) {
+              if (!silent) setImportProgress(`Создание полки "${shelfName}"...`);
+              const newShelfId = `shelf_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+              existingShelf = await saveShelf(newShelfId, shelfName);
+              currentShelves.push(existingShelf);
+              shelvesUpdated = true;
+            }
+            targetShelfId = existingShelf.id;
+          }
+
+          // Save a lightweight record; metadata (pages + cover) is filled
+          // lazily by the background queue (see useEffect below).
+          if (!silent) setImportProgress(`Добавление ${file.name}...`);
+          const id = `comic_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+          const isPdf = file.name.toLowerCase().endsWith('.pdf');
+          const format = isPdf ? 'pdf' : 'cbz';
+          const title = file.name.replace(/\.[^/.]+$/, "");
+          await saveComic(id, title, file.size, [], null, file.uri, format, targetShelfId);
+          importedCount++;
         }
+      }
+
+      // Clean up empty shelves
+      const finalComics = await getAllComics();
+      const usedShelfIds = new Set(finalComics.map(c => c.shelfId).filter(id => id));
+      let shelvesDeleted = false;
+      for (const shelf of currentShelves) {
+        if (!usedShelfIds.has(shelf.id)) {
+          await deleteShelf(shelf.id);
+          shelvesDeleted = true;
+        }
+      }
+
+      if (shelvesUpdated || shelvesDeleted) {
+        const updatedShelvesList = await getAllShelves();
+        setShelves(updatedShelvesList);
+      }
+
+      if (deletedCount > 0 || importedCount > 0) {
+        setComics(finalComics);
       }
     } catch (err) {
       console.error(err);
-      if (!silent) alert('Ошибка при синхронизации папки библиотеки.');
+      if (!silent) await messageDialog('Ошибка при синхронизации папки библиотеки.');
     } finally {
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.clearImportCache === 'function') {
-        bridge.clearImportCache();
-      }
+      await clearImportCache();
       if (!silent) {
         setIsImporting(false);
         setImportProgress('');
@@ -354,107 +279,88 @@ function App() {
     }
   };
 
-  const selectLibraryFolder = () => {
-    const bridge = (window as any).ComiFlowBridge;
-    if (bridge && typeof bridge.selectLibraryFolder === 'function') {
-      bridge.selectLibraryFolder();
-    } else {
-      alert('Выбор папки библиотеки поддерживается только на Android.');
+  const selectLibraryFolder = useCallback(async () => {
+    const uri = await bridgeSelectLibraryFolder();
+    if (uri) {
+      setStoredFolder(uri);
+      setLibraryFolderUri(uri);
+      await syncLibrary(uri);
+    } else if (!isTauri()) {
+      await messageDialog('Выбор папки библиотеки поддерживается только в приложении.');
     }
-  };
-
-  // Initialize DB and Load Settings, Comics & Shelves
-  useEffect(() => {
-    initDb();
-    migrateCovers().catch(err => console.error('Failed to migrate covers:', err));
-    
-    const handleFolderSelected = (e: any) => {
-      const uri = e.detail?.uri;
-      if (uri) {
-        setLibraryFolderUri(uri);
-        syncLibrary(uri);
-      }
-    };
-    window.addEventListener('libraryFolderSelected', handleFolderSelected);
-    
-    // Clear any leftover import caches from previous sessions
-    const bridge = (window as any).ComiFlowBridge;
-    if (bridge) {
-      if (typeof bridge.clearImportCache === 'function') {
-        bridge.clearImportCache();
-      }
-      if (typeof bridge.getLibraryFolderUri === 'function') {
-        const uri = bridge.getLibraryFolderUri();
-        if (uri) {
-          setLibraryFolderUri(uri);
-          syncLibrary(uri, true);
-        }
-      }
-    }
-    
-    // Load settings from localStorage
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setSettings({ ...DEFAULT_SETTINGS, ...parsed });
-        if (parsed.volumeKeysEnabled !== undefined) {
-          updateNativeVolumeKeysState(parsed.volumeKeysEnabled);
-        }
-      } catch (e) {
-        console.warn('Failed to parse saved settings', e);
-      }
-    }
-
-    // Load comics from DB
-    const loadComics = async () => {
-      try {
-        const list = await getAllComics();
-        setComics(list);
-      } catch (err) {
-        console.error('Failed to load library:', err);
-      }
-    };
-    
-    // Load shelves from DB
-    const loadShelves = async () => {
-      try {
-        const list = await getAllShelves();
-        setShelves(list);
-      } catch (err) {
-        console.error('Failed to load shelves:', err);
-      }
-    };
-
-    loadComics();
-    loadShelves();
-
-    // Check for file association intent opening on launch
-    setTimeout(() => {
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge && typeof bridge.getPendingFileUri === 'function') {
-        const uri = bridge.getPendingFileUri();
-        if (uri) {
-          handleOpenFileFromUri(uri);
-        }
-      }
-    }, 1000);
   }, []);
 
-  // Listen to new file open intents while app is running
+  // Initialize DB, Load Settings, Comics, Shelves & saved folder
   useEffect(() => {
-    const handleNativeFile = (e: Event) => {
-      const customEvent = e as CustomEvent<{ uri: string }>;
-      if (customEvent.detail && customEvent.detail.uri) {
-        handleOpenFileFromUri(customEvent.detail.uri);
+    let cancelled = false;
+    (async () => {
+      initDb();
+      migrateCovers().catch(err => console.error('Failed to migrate covers:', err));
+
+      // Load settings from localStorage
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          // Migrate legacy theme names and drop invalid values so a stale
+          // 'light'/'dark' from the old app never breaks light themes.
+          const normalizedTheme = normalizeTheme(parsed.theme);
+          // Migrate legacy deletePhysicalFile: boolean → deleteMode enum.
+          // Old "true" becomes 'permanent' (preserves previous behaviour);
+          // anything else falls back to the safe default 'off'.
+          if (parsed.deleteMode === undefined) {
+            parsed.deleteMode = parsed.deletePhysicalFile === true ? 'permanent' : 'off';
+          }
+          delete parsed.deletePhysicalFile;
+          setSettings({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme });
+          if (parsed.volumeKeysEnabled !== undefined) {
+            setVolumeKeysEnabled(parsed.volumeKeysEnabled);
+          }
+          // Persist the migration so we don't re-normalize every launch.
+          if (parsed.theme !== normalizedTheme || parsed.deletePhysicalFile !== undefined) {
+            localStorage.setItem(
+              LOCAL_STORAGE_KEY,
+              JSON.stringify({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme })
+            );
+          }
+        } catch (e) {
+          console.warn('Failed to parse saved settings', e);
+        }
       }
-    };
-    
-    window.addEventListener('nativeOpenFile', handleNativeFile);
+
+      // Restore previously selected library folder BEFORE showing any UI,
+      // so the "choose folder" screen never flashes for returning users.
+      const storedFolder = getStoredFolder();
+      if (storedFolder) {
+        setLibraryFolderUri(storedFolder);
+        // Kick off sync in the background; do not block first paint.
+        syncLibrary(storedFolder, true).catch(err => console.error('bg sync failed', err));
+      }
+
+      try {
+        const [comicList, shelfList] = await Promise.all([getAllComics(), getAllShelves()]);
+        if (cancelled) return;
+        setComics(comicList);
+        setShelves(shelfList);
+      } catch (err) {
+        console.error('Failed to load library/shelves:', err);
+      }
+
+      if (cancelled) return;
+      setIsInitializing(false);
+
+      // Check for file-association intent opening shortly after launch
+      const pending = await getPendingFileUri();
+      if (pending) {
+        handleOpenFileFromPath(pending);
+      }
+    })();
+
     return () => {
-      window.removeEventListener('nativeOpenFile', handleNativeFile);
+      cancelled = true;
     };
-  }, [comics]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Apply Theme Attribute to HTML Element
   useEffect(() => {
@@ -462,7 +368,7 @@ function App() {
       let resolvedTheme = settings.theme;
       if (settings.theme === 'system') {
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        resolvedTheme = isDark ? 'dark' : 'light';
+        resolvedTheme = isDark ? 'dark-slate' : 'light-slate';
       }
       document.documentElement.setAttribute('data-theme', resolvedTheme);
     };
@@ -472,7 +378,7 @@ function App() {
     if (settings.theme === 'system') {
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
       const listener = (e: MediaQueryListEvent) => {
-        document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', e.matches ? 'dark-slate' : 'light-slate');
       };
       mediaQuery.addEventListener('change', listener);
       return () => {
@@ -487,41 +393,101 @@ function App() {
       const updated = { ...prev, ...newSettings };
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
       if (newSettings.volumeKeysEnabled !== undefined) {
-        updateNativeVolumeKeysState(newSettings.volumeKeysEnabled);
+        setVolumeKeysEnabled(newSettings.volumeKeysEnabled);
       }
       return updated;
     });
   }, []);
 
-  // Background metadata loader worker
+  // Background metadata loader worker — extracts pages + cover for comics
+  // that were saved as lightweight records during sync.
+  //
+  // INVARIANT (prevents UI freeze): after processing, a comic MUST end up with
+  // either non-empty pages OR a metadataError. The `pending` selector requires
+  // both empty pages AND no metadataError, so any comic that fails to produce
+  // pages gets marked once and is never retried — breaking the infinite loop.
+  //
+  // PDF is excluded: Rust returns 0 pages for PDF (parsed by pdf.js on open),
+  // so the queue would otherwise spin on every PDF forever.
   useEffect(() => {
     if (isImporting || isProcessingQueue) return;
 
     const runQueue = async () => {
-      // Find one comic without metadata (empty pages)
-      const pending = comics.find((c) => !c.pages || c.pages.length === 0);
+      const pending = comics.find(
+        (c) =>
+          (!c.pages || c.pages.length === 0) &&
+          !c.metadataError
+      );
       if (!pending) return;
 
       setIsProcessingQueue(true);
       try {
-        const bridge = (window as any).ComiFlowBridge;
-        if (bridge && typeof bridge.getComicMetadataNative === 'function') {
-          const metaJson = bridge.getComicMetadataNative(pending.uri);
-          const metadata = JSON.parse(metaJson);
-          if (!metadata.error) {
-            const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
-            const pages = metadata.format === 'pdf'
-              ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
-              : metadata.pages;
-            
-            await saveComic(pending.id, pending.title, pending.size, pages, coverBlob, pending.uri, metadata.format, pending.shelfId || null);
-            
-            const updatedList = await getAllComics();
-            setComics(updatedList);
+        let pages: string[];
+        let coverBlob: Blob | null = null;
+        let errorMsg: string | null = null;
+
+        if (pending.format === 'pdf') {
+          // PDF: Rust doesn't parse PDFs, so we render the cover + count pages
+          // here via pdf.js, fetching the file straight from disk.
+          try {
+            const res = await fetch(getFileSrc(pending.uri));
+            if (!res.ok) throw new Error('Не удалось прочитать PDF.');
+            const pdfBlob = await res.blob();
+            const pdfFile = new File([pdfBlob], pending.title, { type: 'application/pdf' });
+            const { parsePDF } = await import('./utils/pdf');
+            const parsed = await parsePDF(pdfFile, pending.title);
+            pages = Array.from({ length: parsed.totalPages }, (_, i) => String(i + 1));
+            coverBlob = parsed.coverBlob;
+          } catch (err) {
+            errorMsg = err instanceof Error ? err.message : 'Ошибка обработки PDF.';
+            pages = [];
+          }
+        } else {
+          // CBZ: Rust parses pages + cover natively (fast).
+          const metadata = await getComicMetadataNative(pending.uri);
+
+          if (metadata.error) {
+            errorMsg = metadata.error;
+            pages = [];
+          } else if (metadata.pages.length === 0) {
+            // Valid archive, but no images → not a comic.
+            errorMsg = 'В файле нет изображений.';
+            pages = [];
+          } else {
+            pages = metadata.pages;
+            if (metadata.coverBase64) {
+              coverBlob = base64ToBlob(metadata.coverBase64);
+            }
           }
         }
+
+        // FAIL-SAFE: if processing produced no pages, record metadataError so
+        // this comic is never picked up again (otherwise → infinite loop).
+        if (pages.length === 0 && !errorMsg) {
+          errorMsg = 'Не удалось извлечь страницы.';
+        }
+
+        await saveComic(
+          pending.id, pending.title, pending.size, pages, coverBlob,
+          pending.uri, pending.format || 'cbz', pending.shelfId || null,
+          errorMsg
+        );
+
+        const updatedList = await getAllComics();
+        setComics(updatedList);
       } catch (err) {
         console.error('Queue processing error:', err);
+        try {
+          await saveComic(
+            pending.id, pending.title, pending.size, [], null,
+            pending.uri, 'cbz', pending.shelfId || null,
+            err instanceof Error ? err.message : 'Неизвестная ошибка обработки'
+          );
+          const updatedList = await getAllComics();
+          setComics(updatedList);
+        } catch {
+          /* ignore */
+        }
       } finally {
         setIsProcessingQueue(false);
       }
@@ -541,64 +507,36 @@ function App() {
   // Import files
   const handleImportFiles = async (files: FileList) => {
     if (!libraryFolderUri) {
-      alert('Сначала выберите папку библиотеки.');
+      await messageDialog('Сначала выберите папку библиотеки.');
       return;
     }
-    
+
     setIsImporting(true);
     setImportProgress('Копирование файлов в библиотеку...');
-    
+
     try {
-      const bridge = (window as any).ComiFlowBridge;
-      if (bridge) {
-        const CHUNK_SIZE = 1024 * 1024; // 1MB chunk size
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          const fileAny = file as any;
-          
-          if (fileAny.path && typeof bridge.importFileToLibrary === 'function') { // Capacitor injects path on Android
-             setImportProgress(`Копирование ${file.name}...`);
-             bridge.importFileToLibrary(fileAny.path, file.name, libraryFolderUri);
-          } else if (typeof bridge.startChunkedImport === 'function') {
-             setImportProgress(`Подготовка к копированию ${file.name}...`);
-             const importId = bridge.startChunkedImport(file.name, file.size, libraryFolderUri);
-             if (!importId) throw new Error(`Не удалось начать импорт ${file.name}`);
-             
-             let offset = 0;
-             const totalSize = file.size;
-             
-             while (offset < totalSize) {
-               const chunk = file.slice(offset, offset + CHUNK_SIZE);
-               const arrayBuffer = await chunk.arrayBuffer();
-               const base64 = arrayBufferToBase64(arrayBuffer);
-               
-               const success = bridge.appendChunk(importId, base64);
-               if (!success) {
-                 bridge.cancelChunkedImport(importId);
-                 throw new Error(`Ошибка передачи данных для ${file.name}`);
-               }
-               
-               offset += CHUNK_SIZE;
-               const progress = Math.min(100, Math.round((offset / totalSize) * 100));
-               setImportProgress(`Копирование ${file.name}: ${progress}%`);
-             }
-             
-             const finished = bridge.finishChunkedImport(importId);
-             if (!finished) {
-               throw new Error(`Не удалось завершить копирование ${file.name}`);
-             }
-          } else {
-             alert('Прямое добавление файлов поддерживается только в Android приложении.');
-          }
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        // Tauri web File objects expose `name`; the absolute path is copied
+        // by the Rust `import_file` command directly from the source path.
+        // For desktop we rely on the File's name + the drag/drop path injected
+        // by Tauri as `file.path` when available.
+        const fileAny = file as any;
+        const sourcePath = fileAny.path || fileAny.webkitRelativePath || file.name;
+
+        setImportProgress(`Копирование ${file.name}...`);
+        const ok = await importFileToLibrary(sourcePath, file.name, libraryFolderUri);
+        if (!ok) {
+          throw new Error(`Не удалось скопировать ${file.name}`);
         }
       }
     } catch (err) {
       console.error(err);
-      alert('Ошибка при импорте.');
+      await messageDialog('Ошибка при импорте.');
     } finally {
       setIsImporting(false);
       setImportProgress('');
-      
+
       // Resync library after files are copied
       await syncLibrary(libraryFolderUri);
     }
@@ -615,41 +553,78 @@ function App() {
       // Lazy load metadata if it was not processed yet
       if (!comic.pages || comic.pages.length === 0) {
         setImportProgress('Анализ комикса...');
-        const bridge = (window as any).ComiFlowBridge;
-        if (bridge && typeof bridge.getComicMetadataNative === 'function') {
-          const metaJson = bridge.getComicMetadataNative(comic.uri);
-          const metadata = JSON.parse(metaJson);
-          if (metadata.error) throw new Error(metadata.error);
 
-          const coverBlob = base64ToBlob(metadata.coverBase64, 'image/jpeg');
-          const pages = metadata.format === 'pdf'
-            ? Array.from({ length: metadata.totalPages }, (_, index) => String(index + 1))
-            : metadata.pages;
+        if (comic.format === 'pdf') {
+          // PDF is parsed entirely on the web layer via pdf.js (Rust doesn't
+          // read PDFs). We fetch the file, extract the page count + cover.
+          setImportProgress('Анализ PDF...');
+          const fileUrl = getFileSrc(comic.uri);
+          const res = await fetch(fileUrl);
+          if (!res.ok) throw new Error('Не удалось прочитать PDF-файл.');
+          const pdfBlob = await res.blob();
+          const pdfFile = new File([pdfBlob], comic.title, { type: 'application/pdf' });
 
-          comic = await saveComic(comic.id, comic.title, comic.size, pages, coverBlob, comic.uri, metadata.format, comic.shelfId || null);
-          
-          // Refresh state list
+          const { parsePDF } = await import('./utils/pdf');
+          const parsed = await parsePDF(pdfFile, comic.title);
+          const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
+          comic = await saveComic(
+            comic.id, comic.title, comic.size, pages, parsed.coverBlob,
+            comic.uri, 'pdf', comic.shelfId || null
+          );
           const list = await getAllComics();
           setComics(list);
+
+          // Already have the file — open directly without re-fetching below.
+          libraryScrollYRef.current = window.scrollY;
+          setActiveComicFile(pdfFile);
+          setActiveComicId(id);
+          return;
         }
+
+        // CBZ: Rust parses pages + cover natively (fast).
+        const metadata = await getComicMetadataNative(comic.uri);
+        if (metadata.error) {
+          await saveComic(
+            comic.id, comic.title, comic.size, [], null,
+            comic.uri, metadata.format || 'cbz', comic.shelfId || null,
+            metadata.error
+          );
+          const refreshed = await getAllComics();
+          setComics(refreshed);
+          throw new Error(metadata.error);
+        }
+
+        let coverBlob: Blob | null = null;
+        if (metadata.coverBase64) {
+          coverBlob = base64ToBlob(metadata.coverBase64);
+        }
+        comic = await saveComic(
+          comic.id, comic.title, comic.size, metadata.pages, coverBlob,
+          comic.uri, metadata.format || 'cbz', comic.shelfId || null
+        );
+
+        const list = await getAllComics();
+        setComics(list);
       }
-      
-      const capUrl = (window as any).Capacitor 
-        ? (window as any).Capacitor.convertFileSrc(comic.uri)
-        : comic.uri;
-        
-      const res = await fetch(capUrl);
-      if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
-      const blob = await res.blob();
-      const file = new File([blob], comic.title, { type: blob.type });
-      
+
+      // CBZ in Tauri: pages are streamed from disk one-by-one via Rust, so we
+      // do NOT load the whole archive into RAM. PDF still needs the full file
+      // because pdf.js parses the document structure in-memory.
+      let file: File | null = null;
+      if (comic.format === 'pdf') {
+        const fileUrl = getFileSrc(comic.uri);
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
+        const blob = await res.blob();
+        file = new File([blob], comic.title, { type: blob.type });
+      }
+
       libraryScrollYRef.current = window.scrollY;
       setActiveComicFile(file);
       setActiveComicId(id);
     } catch (err) {
       console.error('Error loading comic file:', err);
-      alert(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
-      handleDeleteComic(id);
+      await messageDialog(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
     } finally {
       setIsImporting(false);
       setImportProgress('');
@@ -660,21 +635,26 @@ function App() {
   const handleCloseReader = useCallback(() => {
     setActiveComicId(null);
     setActiveComicFile(null);
-    
+
     requestAnimationFrame(() => {
       window.scrollTo(0, libraryScrollYRef.current);
     });
-    
-    const bridge = (window as any).ComiFlowBridge;
-    if (bridge && typeof bridge.clearImportCache === 'function') {
-      bridge.clearImportCache();
-    }
-    
+
+    clearImportCache();
+
     // Refresh progress state in library listing
     getAllComics().then((list) => {
       setComics(list);
     });
   }, []);
+
+  // Resolve the physical-file deletion mode from settings.
+  // Returns 'trash' | 'permanent' when physical deletion is enabled, or null
+  // to mean "remove from library only, keep the file on disk".
+  const physicalDeleteMode = (): 'trash' | 'permanent' | null => {
+    const m = settings.deleteMode;
+    return m === 'trash' || m === 'permanent' ? m : null;
+  };
 
   // Delete a comic
   const handleDeleteComic = async (id: string) => {
@@ -684,18 +664,16 @@ function App() {
         URL.revokeObjectURL(comic.coverUrl);
       }
       await deleteComic(id);
-      
-      if (settings.deletePhysicalFile && comic) {
-        const bridge = (window as any).ComiFlowBridge;
-        if (bridge && typeof bridge.deleteSAFFile === 'function') {
-          bridge.deleteSAFFile(comic.uri);
-        }
+
+      const delMode = physicalDeleteMode();
+      if (delMode && comic) {
+        await deleteSAFFile(comic.uri, delMode);
       }
 
       setComics((prev) => prev.filter((c) => c.id !== id));
     } catch (err) {
       console.error('Failed to delete comic:', err);
-      alert('Ошибка при удалении комикса.');
+      await messageDialog('Ошибка при удалении комикса.');
     }
   };
 
@@ -704,7 +682,7 @@ function App() {
     try {
       setIsImporting(true);
       setImportProgress('Очистка библиотеки...');
-      
+
       // Revoke all cover object URLs
       comics.forEach((c) => {
         if (c.coverUrl) URL.revokeObjectURL(c.coverUrl);
@@ -718,7 +696,7 @@ function App() {
       setComics([]);
     } catch (err) {
       console.error('Failed to clear database:', err);
-      alert('Ошибка при очистке библиотеки.');
+      await messageDialog('Ошибка при очистке библиотеки.');
     } finally {
       setIsImporting(false);
       setImportProgress('');
@@ -734,28 +712,14 @@ function App() {
     return id;
   };
 
-  // Delete shelf and optionally its comics
+  // Delete a shelf only — comics on it are unassigned (shelfId = null) by
+  // deleteShelf(), but their DB records and physical files stay intact.
+  // (The confirmation dialog promises "Книги не будут удалены".)
   const handleDeleteShelf = async (id: string) => {
-    try {
-      const bridge = (window as any).ComiFlowBridge;
-      const shelfComics = comics.filter((c) => c.shelfId === id);
-      
-      for (const comic of shelfComics) {
-        if (comic.coverUrl) URL.revokeObjectURL(comic.coverUrl);
-        await deleteComic(comic.id);
-        
-        if (settings.deletePhysicalFile && bridge && typeof bridge.deleteSAFFile === 'function') {
-          bridge.deleteSAFFile(comic.uri);
-        }
-      }
-    } catch (e) {
-      console.error('Failed to delete comics for shelf:', e);
-    }
-    
     await deleteShelf(id);
     const sList = await getAllShelves();
     setShelves(sList);
-    // Refresh comics listing
+    // Refresh comics listing so unassigned comics reappear in "All".
     const cList = await getAllComics();
     setComics(cList);
   };
@@ -769,25 +733,25 @@ function App() {
 
   // Bulk delete comics
   const handleBulkDeleteComics = async (ids: string[]) => {
-    if (window.confirm(`Удалить выбранные файлы (${ids.length})?`)) {
+    if (await confirmDialog(`Удалить выбранные файлы (${ids.length})?`, 'Удаление')) {
       setIsImporting(true);
       setImportProgress('Удаление файлов...');
       try {
-        const bridge = (window as any).ComiFlowBridge;
+        const delMode = physicalDeleteMode();
         for (const id of ids) {
           const comic = comics.find((c) => c.id === id);
           if (comic?.coverUrl) URL.revokeObjectURL(comic.coverUrl);
           await deleteComic(id);
-          
-          if (settings.deletePhysicalFile && comic && bridge && typeof bridge.deleteSAFFile === 'function') {
-            bridge.deleteSAFFile(comic.uri);
+
+          if (delMode && comic) {
+            await deleteSAFFile(comic.uri, delMode);
           }
         }
         const list = await getAllComics();
         setComics(list);
       } catch (err) {
         console.error('Failed bulk delete:', err);
-        alert('Ошибка при пакетном удалении.');
+        await messageDialog('Ошибка при пакетном удалении.');
       } finally {
         setIsImporting(false);
         setImportProgress('');
@@ -807,7 +771,7 @@ function App() {
       setComics(list);
     } catch (err) {
       console.error('Failed bulk shelf assignment:', err);
-      alert('Ошибка при перемещении файлов.');
+      await messageDialog('Ошибка при перемещении файлов.');
     } finally {
       setIsImporting(false);
       setImportProgress('');
@@ -816,9 +780,18 @@ function App() {
 
   // Active comic metadata helper
   const activeComic = comics.find((c) => c.id === activeComicId);
-  const shelfComics = activeComic 
+  const shelfComics = activeComic
     ? comics.filter(c => c.shelfId === activeComic.shelfId)
     : [];
+
+  // Splash screen while initializing (prevents "choose folder" flash)
+  if (isInitializing) {
+    return (
+      <div className="app-splash">
+        <span className="spinner" />
+      </div>
+    );
+  }
 
   return (
     <>
@@ -832,8 +805,8 @@ function App() {
             <h1 className="logo-text">ComiFlow</h1>
           </div>
           <div className="header-actions">
-            <button 
-              className="btn-icon" 
+            <button
+              className="btn-icon"
               onClick={() => setIsSettingsOpen(true)}
               aria-label="Настройки"
             >
@@ -848,17 +821,16 @@ function App() {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', backgroundColor: 'var(--bg-primary)' }}>
           <BookOpen style={{ width: '80px', height: '80px', marginBottom: '16px', color: 'var(--accent)', opacity: 0.5 }} />
           <h2 style={{ fontSize: '28px', fontWeight: 'bold', marginBottom: '16px', color: 'var(--text-primary)' }}>Добро пожаловать!</h2>
-          
+
           <div style={{ maxWidth: '400px', width: '100%', backgroundColor: 'var(--bg-secondary)', borderRadius: '16px', boxShadow: 'var(--card-shadow)', border: '1px solid var(--border-color)', padding: '24px', marginBottom: '32px', textAlign: 'left' }}>
             <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '12px', color: 'var(--text-primary)', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>Инструкция по настройке:</h3>
             <ol style={{ paddingLeft: '20px', margin: 0, color: 'var(--text-secondary)', lineHeight: '1.5', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <li>Нажмите на кнопку ниже.</li>
-              <li>Выберите любое расположение (например, папку <b>Документы</b>).</li>
-              <li>Создайте новую папку для ваших комиксов (назовите её, например, <b>ComiFlow</b>) или выберите существующую.</li>
-              <li>Нажмите <b>«Использовать эту папку»</b>.</li>
+              <li>Выберите папку, в которой хранятся ваши комиксы (например, создайте папку <b>ComiFlow</b>).</li>
+              <li>Подтвердите выбор папки.</li>
             </ol>
           </div>
-          
+
           <button
             onClick={selectLibraryFolder}
             className="btn btn-primary"
@@ -894,7 +866,7 @@ function App() {
       )}
 
       {/* Reader View */}
-      {activeComicId && activeComic && activeComicFile ? (
+      {activeComicId && activeComic ? (
         <Reader
           key={activeComic.id}
           comic={activeComic}
@@ -929,14 +901,14 @@ function App() {
             <div className="settings-header">
               <h3 className="settings-title">Импорт файлов</h3>
             </div>
-            
+
             <div className="settings-section">
               <span className="settings-section-title">Выбранные файлы</span>
               <p style={{ fontSize: '14px', margin: 0, color: 'var(--text-secondary)' }}>
                 Будет добавлено файлов: <strong>{pendingFiles.length}</strong>
               </p>
             </div>
-            
+
             <div className="settings-section">
               <span className="settings-section-title">Выберите полку</span>
               <select
@@ -955,7 +927,7 @@ function App() {
                   </option>
                 ))}
               </select>
-              
+
               <button
                 className="shelf-tab-btn shelf-tab-btn-add"
                 style={{ width: '100%', marginTop: '4px', justifyContent: 'center', borderRadius: '12px' }}
@@ -971,7 +943,7 @@ function App() {
                 + Создать новую полку
               </button>
             </div>
-            
+
             <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
               <button
                 className="btn btn-primary"

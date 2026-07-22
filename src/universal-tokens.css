@@ -1,0 +1,89 @@
+/* --- DESIGN TOKENS: spacing, radii, elevation, z-index, motion, sizing ---
+ *
+ * Theme-agnostic primitives (single value, not per-theme). Цветовые токены
+ * живут в themes.css; типографика — в typography.css. Этот файл закрывает
+ * «дыры», из-за которых потребитель (App.css приложения) хардкодил px-значения:
+ * раньше отсутствовали масштабы spacing/radius/shadow/z-index/motion, поэтому
+ * отступы/радиусы/тени расходились между компонентами.
+ *
+ * Все значения выведены из реально встречающихся в потребителе (TensorMedia):
+ * spacing — 4px-база, covering 0..40px; radius — covering 0..24px+full;
+ * elevation — ступени от строки до модалки, потребляя уже существующий
+ * --shadow (rgba-цвет из themes.css). */
+
+:root {
+  /* ── SPACING (4px base) ────────────────────────────────────────────── */
+  --sp-0:  0;
+  --sp-1:  2px;    /* hairline: inline-badge gaps, kbd padding */
+  --sp-2:  4px;    /* tight icon gaps, list-row inner */
+  --sp-3:  6px;    /* compact button gap, sidebar-group gap */
+  --sp-4:  8px;    /* default gap/padding (most common) */
+  --sp-5:  10px;   /* row padding, telemetry gaps */
+  --sp-6:  12px;   /* control horizontal padding, group spacing */
+  --sp-7:  14px;   /* header gaps */
+  --sp-8:  16px;   /* pane padding, section padding */
+  --sp-9:  20px;   /* tab-pane-content padding, empty-state */
+  --sp-10: 24px;   /* modal padding, large sections */
+  --sp-11: 32px;   /* binary-placeholder padding */
+  --sp-12: 40px;   /* empty-state padding */
+
+  /* Semantic spacing aliases */
+  --gap-control:   var(--sp-4);   /* 8px  — de-facto button/control gap */
+  --gap-row:       var(--sp-3);   /* 6px  — tight list rows */
+  --pad-control-x: var(--sp-6);  /* 12px — input/select horizontal */
+  --pad-control-y: var(--sp-4);  /* 8px  — input/select vertical */
+  --pad-pane:      var(--sp-8);  /* 16px — pane-content padding */
+  --pad-modal:     var(--sp-10); /* 24px — modal padding */
+
+  /* ── RADIUS ────────────────────────────────────────────────────────── */
+  --radius-none: 0;
+  --radius-xs:  2px;    /* search-highlight, kbd */
+  --radius-sm:  4px;    /* scrollbar thumb, small chips */
+  --radius-md:  6px;    /* list-row, badges, thumb */
+  --radius-lg:  8px;    /* buttons, inputs, cards (most common) */
+  --radius-xl:  12px;   /* doc-canvas-box, modal corners */
+  --radius-2xl: 16px;   /* glass-panel, inspector wrappers */
+  --radius-3xl: 24px;   /* floating-island scrubber */
+  --radius-full: 9999px;/* pills, dots, avatars (заменяет 999px и 50%) */
+
+  /* ── ELEVATION (потребляет --shadow из themes.css) ─────────────────── */
+  /* --shadow — это rgba-цвет; здесь превращаем его в готовые box-shadow. */
+  --shadow-xs:    0 1px 2px var(--shadow);    /* inset rows, active tabs */
+  --shadow-sm:    0 2px 5px var(--shadow);    /* top-header */
+  --shadow-md:    0 4px 12px var(--shadow);   /* hover buttons, cards */
+  --shadow-lg:    0 8px 24px var(--shadow);   /* dropdowns, context-menu */
+  --shadow-xl:    0 12px 36px var(--shadow);  /* modal-dialog */
+  --shadow-2xl:   0 24px 64px var(--shadow);  /* license-blocker, theme modal */
+  --shadow-focus: 0 0 0 2px var(--accent-glow);/* input focus ring */
+
+  /* ── Z-INDEX (слои) ────────────────────────────────────────────────── */
+  --z-base:           0;
+  --z-sticky:         2;    /* sticky th, inset shadows */
+  --z-overlay:        5;    /* floating island control slot */
+  --z-header:         10;   /* top-header */
+  --z-dropdown:       100;  /* recluster overlay */
+  --z-modal-backdrop: 1000; /* compare-page, modal-overlay */
+  --z-modal:          1100; /* help-overlay */
+  --z-popover:        1200; /* ctx-backdrop */
+  --z-toast:          9999; /* license-blocker */
+
+  /* ── MOTION ────────────────────────────────────────────────────────── */
+  --duration-fast:   0.1s;  /* hover micro */
+  --duration-base:   0.15s; /* default transitions */
+  --duration-slow:   0.2s;  /* button/transition */
+  --duration-slower: 0.3s;  /* modal slide-up */
+  --ease-standard:   cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out:        cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── CONTROL SIZING (формализует 38px/48px/64px-сетку) ─────────────── */
+  --control-h:      38px;  /* sub-btn, action-btn, select, inputs */
+  --control-h-sm:   32px;  /* icon-btn, cmp-play */
+  --row-h:          38px;  /* group-row, file-row, tree-child */
+  --slot-h:         64px;  /* unified-control-slot / inspector-control-slot */
+  --island-h:       48px;  /* unified-scrubber-box */
+
+  /* ── SEMANTIC ALIASES (закрывают «ghost-токены» в потребителе) ──────── */
+  --text-on-accent:    #ffffff;          /* fg на accent-фоне (замена 25× #fff) */
+  --control-bg-hover:  var(--bg-hover);  /* бывший ghost --button-bg-hover */
+  --border:            var(--border-color); /* backward-compat alias */
+}
