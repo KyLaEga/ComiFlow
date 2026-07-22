@@ -28,7 +28,12 @@ tauri-plugin-dialog = "2"
 # Comic archive parsing
 zip = "2.4"
 base64 = "0.22"
-# Cross-platform move-to-trash (recycle bin) for safe file deletion
-trash = "5"
 # Async oneshot channel for the non-blocking folder picker
 tokio = { version = "1", features = ["sync"] }
+
+# Move-to-trash (recycle bin) for safe file deletion.
+# Only enabled on desktop platforms — `trash` has no Android/iOS backend
+# (there is no system Trash API on Android), and without this gate the crate
+# fails to compile for `aarch64-linux-android`.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+trash = "5"

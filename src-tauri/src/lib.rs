@@ -342,10 +342,26 @@ fn get_cbz_page(file_path: String, page_name: String) -> Option<String> {
 fn delete_file(file_path: String, mode: Option<String>) -> bool {
     // mode = "trash"    → move to system recycle bin (recoverable)
     // mode = "permanent"/None → remove permanently (not recoverable)
+    //
+    // Note: move-to-trash is only available on desktop (macOS/Windows/Linux).
+    // Android has no system Trash API, so on Android "trash" falls through to
+    // permanent removal — there is no safer option available on that platform.
     match mode.as_deref() {
-        Some("trash") => trash::delete(&file_path).is_ok(),
+        Some("trash") => move_to_trash(&file_path),
         _ => fs::remove_file(&file_path).is_ok(),
     }
+}
+
+/// Move a file to the system recycle bin. On Android this is a no-op that
+/// returns false (no trash backend exists), so the caller can fall back.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn move_to_trash(file_path: &str) -> bool {
+    trash::delete(file_path).is_ok()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+fn move_to_trash(_file_path: &str) -> bool {
+    false
 }
 
 /// Native yes/no confirmation dialog (replaces window.confirm, which is
