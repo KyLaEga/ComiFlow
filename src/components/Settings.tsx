@@ -417,7 +417,9 @@ export const Settings: React.FC<SettingsProps> = ({
             </label>
           </div>
 
-          <div className="settings-option-row">
+          {/* Deletion mode: full-width select (like the theme select above) so
+              the long Russian option text never overflows the narrow panel. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
               <Trash2 size={16} /> Удаление файлов с устройства
             </span>
@@ -425,7 +427,8 @@ export const Settings: React.FC<SettingsProps> = ({
               value={settings.deleteMode || 'off'}
               onChange={(e) => onUpdateSettings({ deleteMode: e.target.value as 'off' | 'trash' | 'permanent' })}
               style={{
-                padding: '8px 12px',
+                width: '100%',
+                padding: '10px 12px',
                 borderRadius: '8px',
                 backgroundColor: 'var(--bg-tertiary)',
                 color: 'var(--text-primary)',

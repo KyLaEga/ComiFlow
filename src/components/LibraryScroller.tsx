@@ -32,11 +32,13 @@ export const LibraryScroller: React.FC<LibraryScrollerProps> = ({ itemCount }) =
   const [visible, setVisible] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [pct, setPct] = useState(0); // 0..100 scroll progress
+  // Whether the page actually has enough content to scroll. Measured from the
+  // real document height rather than a fixed item count, so the scroller shows
+  // up whenever scrolling is possible (even with few comics) and hides when not.
+  const [hasScroll, setHasScroll] = useState(false);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
-
-  const hasScroll = itemCount > 12;
 
   const reveal = () => {
     setVisible(true);
@@ -45,13 +47,35 @@ export const LibraryScroller: React.FC<LibraryScrollerProps> = ({ itemCount }) =
   };
 
   useEffect(() => {
+    // Minimum overflow (px) for the scroller to be worth showing.
+    const SCROLL_THRESHOLD = 80;
+    const measure = () => {
+      const overflow = document.documentElement.scrollHeight - window.innerHeight;
+      setHasScroll(overflow > SCROLL_THRESHOLD);
+    };
+    // VirtuosoGrid renders items asynchronously, so measure after paint and on resize.
+    measure();
+    const raf = requestAnimationFrame(measure);
+    const later = setTimeout(measure, 300);
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(later);
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemCount]);
+
+  useEffect(() => {
     if (!hasScroll) return;
 
     const handleScroll = () => {
       const total = document.documentElement.scrollHeight - window.innerHeight;
       const current = total > 0 ? (window.scrollY / total) * 100 : 0;
       setPct(Math.max(0, Math.min(100, current)));
-      if (window.scrollY > window.innerHeight * 0.3) {
+      if (window.scrollY > window.innerHeight * 0.2) {
         reveal();
       }
     };
