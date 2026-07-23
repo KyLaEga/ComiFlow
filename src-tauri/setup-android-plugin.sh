@@ -36,16 +36,20 @@ echo "[setup-android-plugin] ComiFlowBridge.kt → $DEST"
 
 # Добавляем зависимость androidx.documentfile, если её ещё нет в build.gradle.kts.
 # (gen/android/app/build.gradle.kts тоже регенерируется, поэтому добавляем каждый раз.)
+# Делаем вставку через Python — это переносимо между macOS (BSD) и Linux (GNU),
+# в отличие от `sed -i` который на этих ОС принимает разные флаги.
 GRADLE="$GEN_ANDROID/app/build.gradle.kts"
 if [ -f "$GRADLE" ] && ! grep -q "androidx.documentfile:documentfile" "$GRADLE"; then
-  # Вставляем строку в блок dependencies, после открывающей скобки.
-  if grep -q '^dependencies {' "$GRADLE"; then
-    # macOS sed требует -i '' (пустой backup-суффикс).
-    sed -i '' '/^dependencies {/a\
-    implementation("androidx.documentfile:documentfile:1.0.1")
-' "$GRADLE"
-    echo "[setup-android-plugin] добавлена зависимость androidx.documentfile в $GRADLE"
-  fi
+  python3 - "$GRADLE" <<'PY'
+import sys, io
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+needle = "dependencies {\n"
+if needle in src:
+    src = src.replace(needle, needle + '    implementation("androidx.documentfile:documentfile:1.0.1")\n', 1)
+    open(path, "w", encoding="utf-8").write(src)
+    print("[setup-android-plugin] добавлена зависимость androidx.documentfile")
+PY
 fi
 
 echo "[setup-android-plugin] готово."
