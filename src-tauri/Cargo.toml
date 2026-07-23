@@ -28,6 +28,8 @@ tauri-plugin-dialog = "2"
 # Comic archive parsing
 zip = "2.4"
 base64 = "0.22"
+# Shared workspace utilities (MIME detection, natural-order sort)
+core_base = { path = "../../Rust_Workspace/core_base", default-features = false, features = ["mime"] }
 # Async oneshot channel for the non-blocking folder picker
 tokio = { version = "1", features = ["sync"] }
 

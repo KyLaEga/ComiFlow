@@ -80,6 +80,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "core_base",
  "log",
  "serde",
  "serde_json",
@@ -471,6 +472,15 @@ dependencies = [
  "bitflags 2.13.0",
  "core-foundation",
  "libc",
+]
+
+[[package]]
+name = "core_base"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

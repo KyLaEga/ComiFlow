@@ -3,11 +3,99 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_os = "android"))]
+use std::path::PathBuf;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use zip::ZipArchive;
+
+// ── Mobile (Android) bridge plugin ────────────────────────────────────────
+// On Android, file operations go through the Storage Access Framework via a
+// Kotlin plugin (`ComiFlowBridge`). On desktop we keep the fs-based impls.
+// The bridge handle is stored in Tauri's managed state and looked up by the
+// cfg-gated commands below.
+
+#[cfg(target_os = "android")]
+use serde::Deserialize;
+
+#[cfg(target_os = "android")]
+mod comiflow_mobile {
+    use serde::de::DeserializeOwned;
+    use tauri::{
+        plugin::{PluginApi, PluginHandle},
+        AppHandle, Runtime,
+    };
+
+    const PLUGIN_IDENTIFIER: &str = "com.kylaega.comiflow";
+
+    pub fn init<R: Runtime, C: DeserializeOwned>(
+        _app: &AppHandle<R>,
+        api: PluginApi<R, C>,
+    ) -> tauri::Result<ComiFlowBridge<R>> {
+        let handle = api.register_android_plugin(PLUGIN_IDENTIFIER, "ComiFlowBridge")?;
+        Ok(ComiFlowBridge(handle))
+    }
+
+    pub struct ComiFlowBridge<R: Runtime>(pub PluginHandle<R>);
+
+    impl<R: Runtime> ComiFlowBridge<R> {
+        /// Invoke a Kotlin `@Command` method by name and deserialize its
+        /// resolved payload into T.
+        pub fn call<T: DeserializeOwned>(&self, method: &str, payload: serde_json::Value) -> Option<T> {
+            self.0.run_mobile_plugin::<T>(method, payload).ok()
+        }
+    }
+}
+
+/// Initialize the ComiFlow Android bridge plugin (no-op on desktop).
+pub fn init_comiflow_bridge<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("comiflow-bridge")
+        .setup(|app, api| {
+            #[cfg(target_os = "android")]
+            {
+                use tauri::Manager;
+                let bridge = comiflow_mobile::init(app, api)?;
+                app.manage(bridge);
+            }
+            // On desktop the fs-based commands are used directly; the state is
+            // not needed, so just silence the unused-closure-param warnings.
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = (app, api);
+            }
+            Ok(())
+        })
+        .build()
+}
+
+/// Shared helper: on Android return a reference to the managed ComiFlowBridge.
+/// Borrows from Tauri's state table for the lifetime of `app`.
+#[cfg(target_os = "android")]
+fn android_bridge<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<&comiflow_mobile::ComiFlowBridge<R>> {
+    use tauri::Manager;
+    app.try_state::<comiflow_mobile::ComiFlowBridge<R>>().map(|s| s.inner())
+}
+
+// ── Android plugin response shapes (Kotlin → Rust) ───────────────────────
+// Defined at module scope (not inline in commands) because tauri::command's
+// macro expansion conflicts with locally-defined derive types.
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidFilesResp { files: String }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidMetadataResp { metadata: String }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidFolderResp { uri: Option<String> }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidOkResp { ok: bool }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidPathResp { path: String }
 
 // ── Shared JSON shapes ────────────────────────────────────────────────────
 
@@ -48,103 +136,10 @@ impl ComicMetadata {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
-
-const IMAGE_EXTENSIONS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"];
-
-/// True for ordinary image entries, excluding OS metadata / hidden files.
-fn is_image_file(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    if lower.starts_with('.')
-        || lower.contains("__macosx")
-        || lower.contains("thumbs.db")
-        || lower.ends_with('/')
-    {
-        return false;
-    }
-    IMAGE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
-}
-
-/// Natural-order comparator so "page2.jpg" sorts before "page10.jpg".
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    a.localecmp(b)
-}
-
-// localecmp shim: split into numeric / non-numeric chunks and compare.
-trait NaturalCmp {
-    fn localecmp(&self, other: &str) -> std::cmp::Ordering;
-}
-impl NaturalCmp for str {
-    fn localecmp(&self, other: &str) -> std::cmp::Ordering {
-        let mut ai = self.chars().peekable();
-        let mut bi = other.chars().peekable();
-        loop {
-            match (ai.peek(), bi.peek()) {
-                (None, None) => return std::cmp::Ordering::Equal,
-                (None, _) => return std::cmp::Ordering::Less,
-                (_, None) => return std::cmp::Ordering::Greater,
-                (Some(&ac), Some(&bc)) => {
-                    let ac_d = ac.is_ascii_digit();
-                    let bc_d = bc.is_ascii_digit();
-                    if ac_d && bc_d {
-                        // consume whole number runs
-                        let mut a_num = String::new();
-                        let mut b_num = String::new();
-                        while let Some(&c) = ai.peek() {
-                            if c.is_ascii_digit() {
-                                a_num.push(c);
-                                ai.next();
-                            } else {
-                                break;
-                            }
-                        }
-                        while let Some(&c) = bi.peek() {
-                            if c.is_ascii_digit() {
-                                b_num.push(c);
-                                bi.next();
-                            } else {
-                                break;
-                            }
-                        }
-                        let av: u64 = a_num.parse().unwrap_or(0);
-                        let bv: u64 = b_num.parse().unwrap_or(0);
-                        match av.cmp(&bv) {
-                            std::cmp::Ordering::Equal => continue,
-                            ord => return ord,
-                        }
-                    } else {
-                        match ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase()) {
-                            std::cmp::Ordering::Equal => {
-                                ai.next();
-                                bi.next();
-                                continue;
-                            }
-                            ord => return ord,
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn file_extension(name: &str) -> &str {
-    match name.rsplit_once('.') {
-        Some((_, ext)) => ext,
-        None => "",
-    }
-}
-
-/// Map a file name extension to a MIME type for the cover.
-fn mime_for(ext: &str) -> &'static str {
-    match ext.to_lowercase().as_str() {
-        "png" => "image/png",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "avif" => "image/avif",
-        _ => "image/jpeg",
-    }
-}
+// Reused utilities (MIME detection, natural-order sort) live in the shared
+// `core_base` workspace crate to avoid duplication across projects.
+use core_base::mime_utils::{file_extension, is_image_file, mime_for};
+use core_base::natural_cmp;
 
 /// Collect supported comic files inside `dir` (1 level of subfolders → shelves).
 fn collect_comic_files(dir: &Path, out: &mut Vec<LibraryFile>) {
@@ -245,20 +240,80 @@ fn parse_cbz(path: &Path) -> Result<(Vec<String>, Option<Vec<u8>>), String> {
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────
+//
+// Commands that touch the filesystem are cfg-gated: on desktop they use the
+// std::fs implementation above; on Android they delegate to the ComiFlowBridge
+// Kotlin plugin (Storage Access Framework), which is the only way to read
+// content:// URIs and present the system folder picker.
 
 #[tauri::command]
-fn list_library_files(folder_path: String) -> String {
-    let path = Path::new(&folder_path);
-    if !path.exists() || !path.is_dir() {
+fn list_library_files(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    folder_path: String,
+) -> String {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "folderUri": folder_path });
+            let resp: Option<AndroidFilesResp> = bridge.call("listLibraryFiles", payload);
+            if let Some(resp) = resp {
+                return resp.files;
+            }
+            return "[]".to_string();
+        }
         return "[]".to_string();
     }
-    let mut files = Vec::new();
-    collect_comic_files(path, &mut files);
-    serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string())
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let path = Path::new(&folder_path);
+        if !path.exists() || !path.is_dir() {
+            return "[]".to_string();
+        }
+        let mut files = Vec::new();
+        collect_comic_files(path, &mut files);
+        serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string())
+    }
 }
 
 #[tauri::command]
-fn get_comic_metadata(file_path: String) -> String {
+fn get_comic_metadata(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+) -> String {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "uri": file_path });
+            let resp: Option<AndroidMetadataResp> = bridge.call("getComicMetadataNative", payload);
+            if let Some(resp) = resp {
+                return resp.metadata;
+            }
+            return serde_json::to_string(&ComicMetadata::error(
+                String::new(),
+                0,
+                "cbz",
+                "Android bridge unavailable",
+            ))
+            .unwrap_or_else(|_| "{}".to_string());
+        }
+        return serde_json::to_string(&ComicMetadata::error(
+            String::new(),
+            0,
+            "cbz",
+            "Android bridge unavailable",
+        ))
+        .unwrap_or_else(|_| "{}".to_string());
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        get_comic_metadata_desktop(file_path)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn get_comic_metadata_desktop(file_path: String) -> String {
     let path = Path::new(&file_path);
     if !path.exists() {
         return serde_json::to_string(&ComicMetadata::error(
@@ -339,16 +394,36 @@ fn get_cbz_page(file_path: String, page_name: String) -> Option<String> {
 }
 
 #[tauri::command]
-fn delete_file(file_path: String, mode: Option<String>) -> bool {
+fn delete_file(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+    #[allow(unused_variables)] mode: Option<String>,
+) -> bool {
     // mode = "trash"    → move to system recycle bin (recoverable)
     // mode = "permanent"/None → remove permanently (not recoverable)
     //
-    // Note: move-to-trash is only available on desktop (macOS/Windows/Linux).
-    // Android has no system Trash API, so on Android "trash" falls through to
-    // permanent removal — there is no safer option available on that platform.
-    match mode.as_deref() {
-        Some("trash") => move_to_trash(&file_path),
-        _ => fs::remove_file(&file_path).is_ok(),
+    // On desktop, move-to-trash is available via the `trash` crate. On Android
+    // there is no system Trash API, so we delete via SAF (DocumentsContract),
+    // which is permanent — there is no safer option on that platform.
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "uri": file_path });
+            let resp: Option<AndroidOkResp> = bridge.call("deleteSAFFile", payload);
+            if let Some(resp) = resp {
+                return resp.ok;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        match mode.as_deref() {
+            Some("trash") => move_to_trash(&file_path),
+            _ => fs::remove_file(&file_path).is_ok(),
+        }
     }
 }
 
@@ -412,29 +487,78 @@ fn get_pending_file_uri() -> Option<String> {
 
 #[tauri::command]
 async fn select_library_folder(app: tauri::AppHandle) -> Option<String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(target_os = "android")]
+    {
+        // The Kotlin plugin resolves only from its @ActivityCallback (after the
+        // user picks a folder), so run_mobile_plugin blocks until then. Run it
+        // on a blocking thread to avoid stalling the async runtime.
+        let app2 = app.clone();
+        tokio::task::spawn_blocking(move || {
+            let bridge = android_bridge(&app2)?;
+            let payload = serde_json::json!({});
+            let resp: Option<AndroidFolderResp> = bridge.call("selectLibraryFolder", payload);
+            resp.and_then(|r| r.uri)
+        })
+        .await
+        .ok()
+        .flatten()
+    }
 
-    // IMPORTANT: blocking_pick_folder() deadlocks when called from a
-    // #[tauri::command] because the command runs on the main thread, which
-    // also owns the dialog event loop. We use the async callback variant
-    // + a oneshot channel so the command can `.await` the user's choice
-    // without blocking the event loop.
-    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    #[cfg(not(target_os = "android"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    app.dialog().file().pick_folder(move |file_path: Option<tauri_plugin_fs::FilePath>| {
-        let result = file_path
-            .and_then(|fp| fp.into_path().ok())
-            .map(|p| p.to_string_lossy().to_string());
-        let _ = tx.send(result);
-    });
+        // IMPORTANT: blocking_pick_folder() deadlocks when called from a
+        // #[tauri::command] because the command runs on the main thread, which
+        // also owns the dialog event loop. We use the async callback variant
+        // + a oneshot channel so the command can `.await` the user's choice
+        // without blocking the event loop.
+        let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
 
-    // Await the user's selection. If the sender is dropped (dialog cancelled),
-    // default to None.
-    rx.await.unwrap_or(None)
+        app.dialog().file().pick_folder(move |file_path: Option<tauri_plugin_fs::FilePath>| {
+            let result = file_path
+                .and_then(|fp| fp.into_path().ok())
+                .map(|p| p.to_string_lossy().to_string());
+            let _ = tx.send(result);
+        });
+
+        // Await the user's selection. If the sender is dropped (dialog cancelled),
+        // default to None.
+        rx.await.unwrap_or(None)
+    }
 }
 
 #[tauri::command]
-fn import_file(source_path: String, clean_name: String, library_folder: String) -> bool {
+fn import_file(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    source_path: String,
+    clean_name: String,
+    library_folder: String,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({
+                "sourcePath": source_path,
+                "destFileName": clean_name,
+                "folderUri": library_folder,
+            });
+            let resp: Option<AndroidOkResp> = bridge.call("importFileToLibrary", payload);
+            if let Some(resp) = resp {
+                return resp.ok;
+            }            return false;
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        import_file_desktop(source_path, clean_name, library_folder)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn import_file_desktop(source_path: String, clean_name: String, library_folder: String) -> bool {
     let src = PathBuf::from(&source_path);
     let dst_dir = PathBuf::from(&library_folder);
     if !dst_dir.is_dir() {
@@ -471,6 +595,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(init_comiflow_bridge())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
