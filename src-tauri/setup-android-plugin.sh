@@ -52,4 +52,21 @@ if needle in src:
 PY
 fi
 
+# Убираем разрешение INTERNET из манифеста — ComiFlow полностью офлайн
+# (Tauri добавляет его по умолчанию для WebView, но сети здесь нет).
+MANIFEST="$GEN_ANDROID/app/src/main/AndroidManifest.xml"
+if [ -f "$MANIFEST" ] && grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+  python3 - "$MANIFEST" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+import re
+before = src
+src = re.sub(r'\s*<uses-permission android:name="android\.permission\.INTERNET" />\s*', '\n    ', src)
+if src != before:
+    open(path, "w", encoding="utf-8").write(src)
+    print("[setup-android-plugin] убрано разрешение INTERNET из манифеста")
+PY
+fi
+
 echo "[setup-android-plugin] готово."
