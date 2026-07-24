@@ -320,7 +320,8 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                         val name = ze.getName() ?: continue
                         if (!ze.isDirectory() && isImageFile(name)) {
                             pages.add(name)
-                            if (firstImage == null || name.compareTo(firstImage!!, ignoreCase = true) < 0) {
+                            val current = firstImage
+                            if (current == null || name.compareTo(current, ignoreCase = true) < 0) {
                                 firstImage = name
                             }
                         }
@@ -352,7 +353,8 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                     val name = ze.getName() ?: ""
                     if (!ze.isDirectory() && isImageFile(name)) {
                         pages.add(name)
-                        if (targetCover == null || name.compareTo(targetCover!!, ignoreCase = true) < 0) targetCover = name
+                        val current = targetCover
+                        if (current == null || name.compareTo(current, ignoreCase = true) < 0) targetCover = name
                     }
                     zis.closeEntry()
                     ze = zis.nextEntry
