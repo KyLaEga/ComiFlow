@@ -86,6 +86,12 @@ class UriArgs {
     var uri: String? = null
 }
 
+@InvokeArg
+class PageArgs {
+    var uri: String? = null
+    var pageName: String? = null
+}
+
 @TauriPlugin
 class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
 
@@ -432,6 +438,93 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".bmp") ||
             lower.endsWith(".avif")
     }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Single CBZ page extraction (for the reader)
+    // ════════════════════════════════════════════════════════════════════
+
+    @Command
+    fun getCbzPage(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(PageArgs::class.java)
+            val uri = Uri.parse(args.uri ?: "")
+            val pageName = args.pageName ?: ""
+            val base64 = readZipEntryBase64(uri, pageName)
+            if (base64 != null) {
+                val ret = JSObject()
+                ret.put("data", base64)
+                invoke.resolve(ret)
+            } else {
+                invoke.reject("Страница не найдена в архиве: $pageName")
+            }
+        } catch (ex: Exception) {
+            invoke.reject("getCbzPage failed: ${ex.message}")
+        }
+    }
+
+    /**
+     * Прочитать [pageName] из ZIP/CBZ по SAF [uri] и вернуть как data-URL
+     * ("data:<mime>;base64,..."). Сначала пытается random-access через
+     * /proc/self/fd (быстро), при неудаче — стримингом.
+     */
+    private fun readZipEntryBase64(uri: Uri, pageName: String): String? {
+        // Pass 1: random-access через file descriptor (быстро).
+        runCatching {
+            val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching
+            pfd.use { descriptor ->
+                val fdFile = File("/proc/self/fd/${descriptor.fd}")
+                ZipFile(fdFile).use { zf ->
+                    val entry = zf.getEntry(pageName) ?: return@runCatching
+                    zf.getInputStream(entry).use { input ->
+                        return encodeDataUrl(pageName, readAll(input))
+                    }
+                }
+            }
+        }
+
+        // Pass 2: стриминг с поиском нужной записи.
+        runCatching {
+            val input = activity.contentResolver.openInputStream(uri) ?: return@runCatching
+            java.io.BufferedInputStream(input, 65536).use { buffered ->
+                ZipInputStream(buffered).use { zis ->
+                    var ze = zis.nextEntry
+                    while (ze != null) {
+                        if (ze.getName() == pageName) {
+                            val bytes = readAll(zis)
+                            zis.closeEntry()
+                            return encodeDataUrl(pageName, bytes)
+                        }
+                        zis.closeEntry()
+                        ze = zis.nextEntry
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun readAll(input: java.io.InputStream): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var n = input.read(buf)
+        while (n != -1) { baos.write(buf, 0, n); n = input.read(buf) }
+        return baos.toByteArray()
+    }
+
+    private fun encodeDataUrl(pageName: String, bytes: ByteArray): String {
+        val lower = pageName.lowercase()
+        val mime = when {
+            lower.endsWith(".png") -> "image/png"
+            lower.endsWith(".webp") -> "image/webp"
+            lower.endsWith(".gif") -> "image/gif"
+            lower.endsWith(".bmp") -> "image/bmp"
+            lower.endsWith(".avif") -> "image/avif"
+            else -> "image/jpeg"
+        }
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return "data:$mime;base64,$b64"
+    }
+
 
     // ════════════════════════════════════════════════════════════════════
     // Import (single-shot + chunked)
