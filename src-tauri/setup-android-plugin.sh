@@ -69,4 +69,28 @@ if src != before:
 PY
 fi
 
+# Добавляем proguard keep-правила для ComiFlowBridge, если их ещё нет.
+# Tauri вызывает @Command/@InvokeArg через reflection — без keep R8 вырежет
+# плагин в release-сборке (isMinifyEnabled=true), и команды молча не работают.
+PROGUARD="$GEN_ANDROID/app/proguard-rules.pro"
+if [ -f "$PROGUARD" ] && ! grep -q "ComiFlow SAF bridge plugin" "$PROGUARD"; then
+  cat >> "$PROGUARD" <<'KEEP'
+
+# ── ComiFlow SAF bridge plugin ───────────────────────────────────────────
+# Tauri invokes @Command methods and instantiates @InvokeArg argument classes
+# via reflection, so R8/proguard must not rename or strip them.
+-keep class com.kylaega.comiflow.ComiFlowBridge { *; }
+-keep class com.kylaega.comiflow.ComiFlowBridge$* { *; }
+-keep @app.tauri.annotation.TauriPlugin class * { *; }
+-keep @app.tauri.annotation.Command class * { *; }
+-keep @app.tauri.annotation.InvokeArg class * { *; }
+-keep @app.tauri.annotation.ActivityCallback class * { *; }
+-keepclassmembers class * {
+    @app.tauri.annotation.Command <methods>;
+    @app.tauri.annotation.ActivityCallback <methods>;
+}
+KEEP
+  echo "[setup-android-plugin] добавлены proguard keep-правила для ComiFlowBridge"
+fi
+
 echo "[setup-android-plugin] готово."
