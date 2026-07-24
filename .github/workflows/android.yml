@@ -1,14 +1,10 @@
 name: Build Android APK (Tauri)
 
+# Только ручной запуск. core_base подключён через path-зависимость к
+# приватному репозиторию rust-workspace, поэтому автоматическая сборка на CI
+# требует CORE_BASE_PAT (fine-grained PAT с read-доступом). Пока PAT не задан,
+# собирайте Android локально (см. README / setup-android-plugin.sh).
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -21,6 +17,17 @@ jobs:
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
+
+      # core_base подключён через path-зависимость (../../Rust_Workspace/core_base
+      # от src-tauri/). На CI этой папки нет — клонируем rust-workspace репо рядом,
+      # воссоздавая структуру локальной машины. Требует CORE_BASE_PAT в secrets
+      # (fine-grained PAT с read на KyLaEga/rust-workspace).
+      - name: Checkout shared core_base (Rust_Workspace)
+        uses: actions/checkout@v4
+        with:
+          repository: KyLaEga/rust-workspace
+          token: ${{ secrets.CORE_BASE_PAT }}
+          path: ../Rust_Workspace
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
