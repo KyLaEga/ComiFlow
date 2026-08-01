@@ -96,6 +96,9 @@ struct AndroidOkResp { ok: bool }
 #[cfg(target_os = "android")]
 #[derive(Deserialize)]
 struct AndroidPathResp { path: String }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidPageResp { data: Option<String> }
 
 // ── Shared JSON shapes ────────────────────────────────────────────────────
 
@@ -379,18 +382,36 @@ fn get_comic_metadata_desktop(file_path: String) -> String {
 /// as an `<img src>`. This avoids loading the whole archive into RAM — only
 /// the requested entry is decompressed.
 #[tauri::command]
-fn get_cbz_page(file_path: String, page_name: String) -> Option<String> {
-    let path = Path::new(&file_path);
-    let file = fs::File::open(path).ok()?;
-    let mut archive = ZipArchive::new(file).ok()?;
+fn get_cbz_page(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+    page_name: String,
+) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        // On Android, file_path is a SAF content:// URI that std::fs cannot
+        // open. Delegate to the Kotlin bridge, which reads the zip entry via
+        // ContentResolver + ZipFile and returns the page as a data-URL.
+        let bridge = android_bridge(&app)?;
+        let payload = serde_json::json!({ "uri": file_path, "pageName": page_name });
+        let resp: Option<AndroidPageResp> = bridge.call("getCbzPage", payload);
+        resp.and_then(|r| r.data)
+    }
 
-    let mut entry = archive.by_name(&page_name).ok()?;
-    let mut buf = Vec::with_capacity(512 * 1024);
-    entry.read_to_end(&mut buf).ok()?;
+    #[cfg(not(target_os = "android"))]
+    {
+        let path = Path::new(&file_path);
+        let file = fs::File::open(path).ok()?;
+        let mut archive = ZipArchive::new(file).ok()?;
 
-    let mime = mime_for(file_extension(&page_name));
-    let b64 = general_purpose::STANDARD.encode(&buf);
-    Some(format!("data:{mime};base64,{b64}"))
+        let mut entry = archive.by_name(&page_name).ok()?;
+        let mut buf = Vec::with_capacity(512 * 1024);
+        entry.read_to_end(&mut buf).ok()?;
+
+        let mime = mime_for(file_extension(&page_name));
+        let b64 = general_purpose::STANDARD.encode(&buf);
+        Some(format!("data:{mime};base64,{b64}"))
+    }
 }
 
 #[tauri::command]
