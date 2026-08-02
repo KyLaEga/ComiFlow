@@ -313,7 +313,10 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
         var coverBytes: ByteArray? = null
         var parsed = false
 
-        // Pass 0: try random-access via /proc/self/fd (much faster when available)
+        // Pass 0: try random-access via /proc/self/fd (much faster when available).
+        // NOTE: on Android 15+ (SELinux) readlink(/proc/self/fd/N) is forbidden
+        // for untrusted apps, so ZipFile(fdFile) fails here and we fall through
+        // to the streaming pass below. That is expected and fine.
         runCatching {
             val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching
             pfd.use { descriptor ->
@@ -346,6 +349,8 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                     parsed = true
                 }
             }
+        }.onFailure { ex ->
+            Logger.error("parseCbz Pass0 failed: ${ex.message}")
         }
 
         // Fallback: streaming double-pass
@@ -353,35 +358,56 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             pages.clear()
             coverBytes = null
             var targetCover: String? = null
-            ZipInputStream(activity.contentResolver.openInputStream(uri).let { java.io.BufferedInputStream(it, 65536) }).use { zis ->
-                var ze = zis.nextEntry
-                while (ze != null) {
-                    val name = ze.getName() ?: ""
-                    if (!ze.isDirectory() && isImageFile(name)) {
-                        pages.add(name)
-                        val current = targetCover
-                        if (current == null || name.compareTo(current, ignoreCase = true) < 0) targetCover = name
-                    }
-                    zis.closeEntry()
-                    ze = zis.nextEntry
-                }
-            }
-            if (targetCover != null) {
-                ZipInputStream(activity.contentResolver.openInputStream(uri).let { java.io.BufferedInputStream(it, 65536) }).use { zis ->
-                    var ze = zis.nextEntry
-                    while (ze != null) {
-                        if (ze.getName() == targetCover) {
-                            val baos = ByteArrayOutputStream()
-                            val buf = ByteArray(8192)
-                            var n = zis.read(buf)
-                            while (n != -1) { baos.write(buf, 0, n); n = zis.read(buf) }
-                            coverBytes = baos.toByteArray()
-                            zis.closeEntry()
-                            break
+            try {
+                val input = activity.contentResolver.openInputStream(uri)
+                if (input == null) {
+                    Logger.error("parseCbz Pass2: openInputStream returned null")
+                } else {
+                    java.io.BufferedInputStream(input, 65536).use { buffered ->
+                        ZipInputStream(buffered).use { zis ->
+                            var ze = zis.nextEntry
+                            while (ze != null) {
+                                val name = ze.getName() ?: ""
+                                if (!ze.isDirectory() && isImageFile(name)) {
+                                    pages.add(name)
+                                    val current = targetCover
+                                    if (current == null || name.compareTo(current, ignoreCase = true) < 0) targetCover = name
+                                }
+                                zis.closeEntry()
+                                ze = zis.nextEntry
+                            }
                         }
-                        zis.closeEntry()
-                        ze = zis.nextEntry
                     }
+                }
+            } catch (ex: Exception) {
+                Logger.error("parseCbz Pass2 failed: ${ex.message}")
+            }
+
+            if (targetCover != null) {
+                runCatching {
+                    val input = activity.contentResolver.openInputStream(uri)
+                    if (input != null) {
+                        java.io.BufferedInputStream(input, 65536).use { buffered ->
+                            ZipInputStream(buffered).use { zis ->
+                                var ze = zis.nextEntry
+                                while (ze != null) {
+                                    if (ze.getName() == targetCover) {
+                                        val baos = ByteArrayOutputStream()
+                                        val buf = ByteArray(8192)
+                                        var n = zis.read(buf)
+                                        while (n != -1) { baos.write(buf, 0, n); n = zis.read(buf) }
+                                        coverBytes = baos.toByteArray()
+                                        zis.closeEntry()
+                                        break
+                                    }
+                                    zis.closeEntry()
+                                    ze = zis.nextEntry
+                                }
+                            }
+                        }
+                    }
+                }.onFailure { ex ->
+                    Logger.error("parseCbz cover pass failed: ${ex.message}")
                 }
             }
         }
