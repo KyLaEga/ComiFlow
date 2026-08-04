@@ -7,10 +7,10 @@ use std::path::Path;
 #[cfg(not(target_os = "android"))]
 use std::path::PathBuf;
 
+#[cfg_attr(target_os = "android", allow(unused_imports))]
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use zip::ZipArchive;
-
 // ── Mobile (Android) bridge plugin ────────────────────────────────────────
 // On Android, file operations go through the Storage Access Framework via a
 // Kotlin plugin (`ComiFlowBridge`). On desktop we keep the fs-based impls.
@@ -95,13 +95,19 @@ struct AndroidFolderResp { uri: Option<String> }
 struct AndroidOkResp { ok: bool }
 #[cfg(target_os = "android")]
 #[derive(Deserialize)]
-struct AndroidPathResp { path: String }
+struct AndroidPageResp { data: Option<String> }
 #[cfg(target_os = "android")]
 #[derive(Deserialize)]
-struct AndroidPageResp { data: Option<String> }
+struct AndroidChunkResp {
+    #[serde(rename = "importId")]
+    import_id: String,
+}
 
 // ── Shared JSON shapes ────────────────────────────────────────────────────
+// Десктопные структуры/функции не используются на Android-таргете (там всё
+// идёт через Kotlin-мост), поэтому помечаем их allow(dead_code) для Android.
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[derive(Serialize)]
 struct LibraryFile {
     name: String,
@@ -141,10 +147,12 @@ impl ComicMetadata {
 // ── Helpers ───────────────────────────────────────────────────────────────
 // Reused utilities (MIME detection, natural-order sort) live in the shared
 // `core_base` workspace crate to avoid duplication across projects.
+#[cfg_attr(target_os = "android", allow(unused_imports))]
 use core_base::mime_utils::{file_extension, is_image_file, mime_for};
 use core_base::natural_cmp;
 
 /// Collect supported comic files inside `dir` (1 level of subfolders → shelves).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn collect_comic_files(dir: &Path, out: &mut Vec<LibraryFile>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -185,6 +193,7 @@ fn collect_comic_files(dir: &Path, out: &mut Vec<LibraryFile>) {
     }
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 struct FileMeta {
     name: String,
     size: u64,
@@ -193,6 +202,7 @@ struct FileMeta {
 /// Return Some(meta) if the path is a supported comic file (.cbz/.pdf).
 /// Plain .zip is intentionally excluded: a generic zip is rarely a comic and
 /// only clutters the library. CBZ *is* a zip and is still recognized.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn file_metadata(path: &Path) -> Option<FileMeta> {
     let name = path.file_name()?.to_string_lossy().to_string();
     let lower = name.to_lowercase();
@@ -204,6 +214,7 @@ fn file_metadata(path: &Path) -> Option<FileMeta> {
 }
 
 /// Parse a CBZ/CBZ-like zip: returns (sorted page names, cover bytes).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn parse_cbz(path: &Path) -> Result<(Vec<String>, Option<Vec<u8>>), String> {
     let file = fs::File::open(path).map_err(|e| format!("Не удалось открыть файл: {e}"))?;
     let mut archive =
@@ -292,21 +303,8 @@ fn get_comic_metadata(
             if let Some(resp) = resp {
                 return resp.metadata;
             }
-            return serde_json::to_string(&ComicMetadata::error(
-                String::new(),
-                0,
-                "cbz",
-                "Android bridge unavailable",
-            ))
-            .unwrap_or_else(|_| "{}".to_string());
         }
-        return serde_json::to_string(&ComicMetadata::error(
-            String::new(),
-            0,
-            "cbz",
-            "Android bridge unavailable",
-        ))
-        .unwrap_or_else(|_| "{}".to_string());
+        metadata_error_json("Android bridge unavailable")
     }
 
     #[cfg(not(target_os = "android"))]
@@ -315,7 +313,15 @@ fn get_comic_metadata(
     }
 }
 
+/// JSON-метка ошибки метаданных (общая для Android-веток, чтобы не дублировать).
+#[cfg(target_os = "android")]
+fn metadata_error_json(msg: &str) -> String {
+    serde_json::to_string(&ComicMetadata::error(String::new(), 0, "cbz", msg))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(not(target_os = "android"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn get_comic_metadata_desktop(file_path: String) -> String {
     let path = Path::new(&file_path);
     if !path.exists() {
@@ -450,11 +456,13 @@ fn delete_file(
 
 /// Move a file to the system recycle bin. On Android this is a no-op that
 /// returns false (no trash backend exists), so the caller can fall back.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 fn move_to_trash(file_path: &str) -> bool {
     trash::delete(file_path).is_ok()
 }
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn move_to_trash(_file_path: &str) -> bool {
     false
@@ -496,9 +504,126 @@ fn clear_import_cache() {
     // No-op on desktop — caches are managed by the web layer.
 }
 
+/// Включить/выключить перехват клавиш громкости.
+/// Android: флаг сохраняется в SharedPreferences, его читает MainActivity
+/// (диспетчеризует `nativeVolumeKey`-события в WebView). Desktop: no-op.
 #[tauri::command]
-fn set_volume_keys_enabled(_enabled: bool) {
-    // No-op on desktop.
+fn set_volume_keys_enabled(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    enabled: bool,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "enabled": enabled });
+            let resp: Option<AndroidOkResp> = bridge.call("setVolumeKeysEnabled", payload);
+            return resp.map(|r| r.ok).unwrap_or(false);
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, enabled);
+        true
+    }
+}
+
+// ── Chunked import (Android) ───────────────────────────────────────────────
+// `<input type=file>` на Android даёт только Blob — нет пути к файлу, поэтому
+// веб-слой читает File по частям и отправляет base64-чанки в Kotlin, который
+// пишет их во временный файл и в конце копирует в SAF-папку библиотеки.
+// На desktop импорт идёт нативно через `import_file` (fs::copy), эти команды
+// возвращают None/false.
+
+#[tauri::command]
+fn start_chunked_import(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_name: String,
+    #[allow(unused_variables)] file_size: u64,
+    library_folder: String,
+) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = android_bridge(&app)?;
+        let payload = serde_json::json!({
+            "fileName": file_name,
+            "totalSize": file_size,
+            "folderUri": library_folder,
+        });
+        let resp: Option<AndroidChunkResp> = bridge.call("startChunkedImport", payload);
+        resp.map(|r| r.import_id)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (file_name, file_size, library_folder);
+        None
+    }
+}
+
+#[tauri::command]
+fn append_chunk(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    import_id: String,
+    base64_data: String,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "importId": import_id, "base64Data": base64_data });
+            let resp: Option<AndroidOkResp> = bridge.call("appendChunk", payload);
+            return resp.map(|r| r.ok).unwrap_or(false);
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (import_id, base64_data);
+        false
+    }
+}
+
+#[tauri::command]
+fn finish_chunked_import(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    import_id: String,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "importId": import_id });
+            let resp: Option<AndroidOkResp> = bridge.call("finishChunkedImport", payload);
+            return resp.map(|r| r.ok).unwrap_or(false);
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = import_id;
+        false
+    }
+}
+
+#[tauri::command]
+fn cancel_chunked_import(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    import_id: String,
+) {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "importId": import_id });
+            let _: Option<AndroidOkResp> = bridge.call("cancelChunkedImport", payload);
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = import_id;
+    }
 }
 
 #[tauri::command]
@@ -579,6 +704,7 @@ fn import_file(
 }
 
 #[cfg(not(target_os = "android"))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn import_file_desktop(source_path: String, clean_name: String, library_folder: String) -> bool {
     let src = PathBuf::from(&source_path);
     let dst_dir = PathBuf::from(&library_folder);
@@ -637,6 +763,10 @@ pub fn run() {
             get_pending_file_uri,
             select_library_folder,
             import_file,
+            start_chunked_import,
+            append_chunk,
+            finish_chunked_import,
+            cancel_chunked_import,
             confirm_dialog,
             message_dialog,
         ])

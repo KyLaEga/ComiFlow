@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { updateComicProgress } from '../utils/db';
 import type { ComicMetadata } from '../utils/db';
-import { getPageBlob, clearCBZCache } from '../utils/cbz';
+import { getPageBlob } from '../utils/cbz';
 import { getPdfPageBlob, clearPDFCache, clearPdfPageCache } from '../utils/pdf';
 import type { ReaderSettings } from './Settings';
 import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X } from 'lucide-react';
@@ -219,7 +219,6 @@ export const Reader: React.FC<ReaderProps> = ({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [showNextOverlay, setShowNextOverlay] = useState(false);
   const [pageUrl, setPageUrl] = useState<string | null>(null);
-  const [nextPageUrl, setNextPageUrl] = useState<string | null>(null);
   const [isLoadingPage, setIsLoadingPage] = useState(false);
   const [isHudActive, setIsHudActive] = useState(true);
   
@@ -272,6 +271,10 @@ export const Reader: React.FC<ReaderProps> = ({
   const startDragOffset = useRef({ x: 0, y: 0 });
   const lastTapTime = useRef(0);
   const latestLoadId = useRef(0);
+  // Рефы владеют жизненным циклом object-URL страниц: стейт нужен только
+  // для отрисовки, а ревок происходит по рефам — без гонок с re-render.
+  const pageUrlRef = useRef<string | null>(null);
+  const nextPageUrlRef = useRef<string | null>(null);
   
   // Touch swipe states
   const [swipeTranslation, setSwipeTranslation] = useState(0);
@@ -285,7 +288,7 @@ export const Reader: React.FC<ReaderProps> = ({
   const [isScrollingFastScroll, setIsScrollingFastScroll] = useState(false);
   const [isDraggingFastScroll, setIsDraggingFastScroll] = useState(false);
   const [fastScrollPct, setFastScrollPct] = useState(0); // 0 to 100
-  const fastScrollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const fastScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fastScrollTrackRef = useRef<HTMLDivElement>(null);
 
   // Listen to scrolls on webtoonContainer
@@ -376,7 +379,7 @@ export const Reader: React.FC<ReaderProps> = ({
       // `fileBlob` is only used on the web fallback path (JSZip).
       return await getPageBlob(comic.uri, fileBlob, comic.pages[index]);
     }
-  }, [comic.uri, comic.pages, comic.format, fileBlob]);
+  }, [comic.uri, comic.pages, comic.format, comic.id, fileBlob]);
 
   // Prefetch adjacent page
   const prefetchNextPage = useCallback(async (nextIdx: number) => {
@@ -384,12 +387,17 @@ export const Reader: React.FC<ReaderProps> = ({
       try {
         const nextBlob = await fetchPageBlob(nextIdx);
         const url = URL.createObjectURL(nextBlob);
-        setNextPageUrl(url);
+        // Заменить непотреблённый prefetch (если листали быстрее, чем он грузился).
+        if (nextPageUrlRef.current) URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = url;
       } catch (err) {
         console.warn('Failed to prefetch next page:', err);
       }
     } else {
-      setNextPageUrl(null);
+      if (nextPageUrlRef.current) {
+        URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = null;
+      }
     }
   }, [comic.pages.length, fetchPageBlob]);
 
@@ -398,22 +406,24 @@ export const Reader: React.FC<ReaderProps> = ({
     setIsLoadingPage(true);
     const loadId = ++latestLoadId.current;
     try {
-      // Clear previous page url to avoid memory leaks
-      if (pageUrl && pageUrl !== nextPageUrl) {
-        URL.revokeObjectURL(pageUrl);
+      // Ревок предыдущей страницы — по рефам, чтобы никогда не задеть
+      // prefetch, который вот-вот будет использован.
+      if (pageUrlRef.current && pageUrlRef.current !== nextPageUrlRef.current) {
+        URL.revokeObjectURL(pageUrlRef.current);
+        pageUrlRef.current = null;
       }
 
-      // If we jumped to a page that isn't the next page, revoke prefetch to prevent memory leak
-      if (nextPageUrl && index !== currentPage + 1) {
-        URL.revokeObjectURL(nextPageUrl);
-        setNextPageUrl(null);
+      // Если прыгнули мимо prefetch-страницы — он больше не нужен.
+      if (nextPageUrlRef.current && index !== currentPage + 1) {
+        URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = null;
       }
 
       let newUrl: string;
-      // If we already prefetched this page, use it!
-      if (nextPageUrl && index === currentPage + 1) {
-        newUrl = nextPageUrl;
-        setNextPageUrl(null);
+      // Если prefetch уже на месте — используем его без повторной загрузки.
+      if (nextPageUrlRef.current && index === currentPage + 1) {
+        newUrl = nextPageUrlRef.current;
+        nextPageUrlRef.current = null;
       } else {
         const blob = await fetchPageBlob(index);
         newUrl = URL.createObjectURL(blob);
@@ -425,6 +435,7 @@ export const Reader: React.FC<ReaderProps> = ({
         return;
       }
 
+      pageUrlRef.current = newUrl;
       setPageUrl(newUrl);
 
       if (!settings.zoomLock) {
@@ -446,35 +457,39 @@ export const Reader: React.FC<ReaderProps> = ({
         setIsLoadingPage(false);
       }
     }
-  }, [currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
+  }, [currentPage, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
 
-  // Init mode transitions
+  // Init / mode transitions: только webtoon нуждается в прыжке к текущей
+  // странице; в paged-режиме загрузку страницы делает эффект
+  // [currentPage, settings.mode] ниже (иначе при старте страница грузилась
+  // дважды — из обоих эффектов).
   useEffect(() => {
     if (settings.mode === 'webtoon') {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         const pageEl = document.getElementById(`webtoon-page-${currentPage}`);
         pageEl?.scrollIntoView({ block: 'start' });
       }, 500);
-    } else {
-      loadPage(currentPage);
+      return () => clearTimeout(timer);
     }
+  }, [settings.mode, currentPage]);
 
+  // Unmount cleanup: object-URL страниц + кэши (по рефам — ревок никогда
+  // не сработает во время активного отображения страницы).
+  useEffect(() => {
     return () => {
-      // Cleanup URLs
-      if (pageUrl) URL.revokeObjectURL(pageUrl);
-      if (nextPageUrl) URL.revokeObjectURL(nextPageUrl);
-      clearCBZCache();
+      if (pageUrlRef.current) URL.revokeObjectURL(pageUrlRef.current);
+      if (nextPageUrlRef.current) URL.revokeObjectURL(nextPageUrlRef.current);
       clearPDFCache();
       clearPdfPageCache();
     };
-  }, [settings.mode]);
+  }, []);
 
   // Sync page changes in paged mode
   useEffect(() => {
     if (settings.mode === 'paged') {
       loadPage(currentPage);
     }
-  }, [currentPage, settings.mode]);
+  }, [currentPage, settings.mode, loadPage]);
 
   // Handle page turns (paged mode)
   const turnPage = useCallback((dir: 'next' | 'prev') => {
@@ -688,10 +703,14 @@ export const Reader: React.FC<ReaderProps> = ({
     }
   };
 
-  // Filter Styles for Brightness and Contrast
-  const filterStyles = {
-    filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)`,
-  };
+  // Filter Styles for Brightness and Contrast (мемоизованы — иначе каждый
+  // скролл в webtoon пересоздаёт объект и ререндерит все страницы ленты)
+  const filterStyles = useMemo(
+    () => ({
+      filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)`,
+    }),
+    [settings.brightness, settings.contrast],
+  );
 
   return (
     <div className="reader-container">
@@ -998,95 +1017,104 @@ interface WebtoonPageWrapperProps {
   filterStyles: React.CSSProperties;
 }
 
-const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = ({
-  index,
-  fetchPageBlob,
-  onVisible,
-  filterStyles
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
-  
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      async (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting) {
-          onVisible(index);
-          
-          // Lazy load page blob
-          if (!imgUrl) {
-            try {
-              const blob = await fetchPageBlob(index);
-              const url = URL.createObjectURL(blob);
-              setImgUrl(url);
-            } catch (err) {
-              console.error(`Failed to load Webtoon page ${index}:`, err);
+const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = React.memo(
+  ({ index, fetchPageBlob, onVisible, filterStyles }) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [imgUrl, setImgUrl] = useState<string | null>(null);
+    const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+    // Реф владеет URL: observer-колбэк читает/пишет его, а state только
+    // отражает текущий URL для отрисовки. Раньше `imgUrl` был в deps —
+    // cleanup ревокал URL ещё показываемой картинки (гонка с async-загрузкой).
+    const imgUrlRef = useRef<string | null>(null);
+
+    const setUrl = (url: string | null) => {
+      imgUrlRef.current = url;
+      setImgUrl(url);
+    };
+
+    useEffect(() => {
+      let cancelled = false;
+      const observer = new IntersectionObserver(
+        async (entries) => {
+          const entry = entries[0];
+          if (entry.isIntersecting) {
+            onVisible(index);
+
+            // Lazy load page blob (только если ещё не загружена)
+            if (!imgUrlRef.current) {
+              try {
+                const blob = await fetchPageBlob(index);
+                if (cancelled) return; // компонент размонтирован — blob просто выбрасываем
+                setUrl(URL.createObjectURL(blob));
+              } catch (err) {
+                console.error(`Failed to load Webtoon page ${index}:`, err);
+              }
+            }
+          } else {
+            // Offload image if scrolled far away to protect RAM memory
+            if (imgUrlRef.current) {
+              URL.revokeObjectURL(imgUrlRef.current);
+              setUrl(null);
             }
           }
-        } else {
-          // Offload image if scrolled far away to protect RAM memory
-          if (imgUrl) {
-            URL.revokeObjectURL(imgUrl);
-            setImgUrl(null);
-          }
-        }
-      },
-      {
-        rootMargin: '1000px 0px', // Load images 1000px before entering viewport
-        threshold: 0.01
+        },
+        {
+          rootMargin: '1000px 0px', // Load images 1000px before entering viewport
+          threshold: 0.01,
+        },
+      );
+
+      if (containerRef.current) {
+        observer.observe(containerRef.current);
       }
-    );
 
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
+      return () => {
+        cancelled = true;
+        observer.disconnect();
+        if (imgUrlRef.current) {
+          URL.revokeObjectURL(imgUrlRef.current);
+          imgUrlRef.current = null;
+        }
+      };
+    }, [index, fetchPageBlob, onVisible]);
 
-    return () => {
-      observer.disconnect();
-      if (imgUrl) {
-        URL.revokeObjectURL(imgUrl);
+    const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const img = e.currentTarget;
+      if (img.naturalWidth && img.naturalHeight) {
+        setAspectRatio(img.naturalWidth / img.naturalHeight);
       }
     };
-  }, [index, fetchPageBlob, imgUrl]);
 
-  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget;
-    if (img.naturalWidth && img.naturalHeight) {
-      setAspectRatio(img.naturalWidth / img.naturalHeight);
-    }
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      id={`webtoon-page-${index}`}
-      style={{
-        width: '100%',
-        aspectRatio: aspectRatio ? `${aspectRatio}` : '2/3',
-        backgroundColor: '#000000',
-        minHeight: '200px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      {imgUrl ? (
-        <img
-          src={imgUrl}
-          alt={`Страница ${index + 1}`}
-          onLoad={handleImageLoad}
-          style={{
-            width: '100%',
-            height: 'auto',
-            display: 'block',
-            ...filterStyles,
-          }}
-        />
-      ) : (
-        <div className="spinner" style={{ width: '30px', height: '30px', borderTopColor: 'var(--accent)' }} />
-      )}
-    </div>
-  );
-};
+    return (
+      <div
+        ref={containerRef}
+        id={`webtoon-page-${index}`}
+        style={{
+          width: '100%',
+          aspectRatio: aspectRatio ? `${aspectRatio}` : '2/3',
+          backgroundColor: '#000000',
+          minHeight: '200px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {imgUrl ? (
+          <img
+            src={imgUrl}
+            alt={`Страница ${index + 1}`}
+            onLoad={handleImageLoad}
+            style={{
+              width: '100%',
+              height: 'auto',
+              display: 'block',
+              ...filterStyles,
+            }}
+          />
+        ) : (
+          <div className="spinner" style={{ width: '30px', height: '30px', borderTopColor: 'var(--accent)' }} />
+        )}
+      </div>
+    );
+  },
+);

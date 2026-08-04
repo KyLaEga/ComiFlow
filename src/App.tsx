@@ -32,7 +32,6 @@ import { base64ToBlob } from './utils/pageUtils';
 
 import { Reader } from './components/Reader';
 import { Settings } from './components/Settings';
-import './App.css';
 
 
 const LOCAL_STORAGE_KEY = 'comiflow_settings';
@@ -190,15 +189,13 @@ function App() {
   };
 
   // Sync library folder (Tauri: native metadata extraction)
-  const syncLibrary = async (folderUri: string, silent: boolean = false) => {
+  const syncLibrary = useCallback(async (folderUri: string, silent: boolean = false) => {
     if (!silent) {
       setIsImporting(true);
       setImportProgress('Синхронизация библиотеки...');
     }
     try {
-      console.log('[sync] start, folder:', folderUri);
       const safFiles = await listLibraryFiles(folderUri);
-      console.log('[sync] files found:', safFiles.length);
 
       const existingComics = await getAllComics();
       const existingUris = new Set(existingComics.map(c => c.uri));
@@ -277,7 +274,7 @@ function App() {
         setImportProgress('');
       }
     }
-  };
+  }, [shelves]);
 
   const selectLibraryFolder = useCallback(async () => {
     const uri = await bridgeSelectLibraryFolder();
@@ -288,7 +285,7 @@ function App() {
     } else if (!isTauri()) {
       await messageDialog('Выбор папки библиотеки поддерживается только в приложении.');
     }
-  }, []);
+  }, [syncLibrary]);
 
   // Initialize DB, Load Settings, Comics, Shelves & saved folder
   useEffect(() => {
@@ -330,11 +327,13 @@ function App() {
 
       // Restore previously selected library folder BEFORE showing any UI,
       // so the "choose folder" screen never flashes for returning users.
+      // Ждём завершения тихой синхронизации ДО чтения полок/комиксов:
+      // иначе гонка — sync() создаёт полки из подпапок, а параллельное
+      // getAllShelves() может перезаписать их пустым списком.
       const storedFolder = getStoredFolder();
       if (storedFolder) {
         setLibraryFolderUri(storedFolder);
-        // Kick off sync in the background; do not block first paint.
-        syncLibrary(storedFolder, true).catch(err => console.error('bg sync failed', err));
+        await syncLibrary(storedFolder, true).catch(err => console.error('bg sync failed', err));
       }
 
       try {
@@ -467,24 +466,24 @@ function App() {
           errorMsg = 'Не удалось извлечь страницы.';
         }
 
-        await saveComic(
+        // Сохраняем и обновляем стейт ТОЛЬКО для обработанного комикса —
+        // полное перечитывание БД (getAllComics) на каждом из ~1000 файлов
+        // было бы очень дорогим (IndexedDB-iterate + полный ререндер грида).
+        const saved = await saveComic(
           pending.id, pending.title, pending.size, pages, coverBlob,
           pending.uri, pending.format || 'cbz', pending.shelfId || null,
           errorMsg
         );
-
-        const updatedList = await getAllComics();
-        setComics(updatedList);
+        setComics((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
       } catch (err) {
         console.error('Queue processing error:', err);
         try {
-          await saveComic(
+          const saved = await saveComic(
             pending.id, pending.title, pending.size, [], null,
             pending.uri, 'cbz', pending.shelfId || null,
             err instanceof Error ? err.message : 'Неизвестная ошибка обработки'
           );
-          const updatedList = await getAllComics();
-          setComics(updatedList);
+          setComics((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
         } catch {
           /* ignore */
         }
@@ -493,7 +492,9 @@ function App() {
       }
     };
 
-    const timer = setTimeout(runQueue, 1500); // 1.5s delay to keep UI snappy
+    // Короткая пауза между файлами: держит UI отзывчивым, но не превращает
+    // загрузку 1000 комиксов в полчаса ожидания (было 1.5s).
+    const timer = setTimeout(runQueue, 250);
     return () => clearTimeout(timer);
   }, [comics, isImporting, isProcessingQueue]);
 
@@ -517,15 +518,10 @@ function App() {
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        // Tauri web File objects expose `name`; the absolute path is copied
-        // by the Rust `import_file` command directly from the source path.
-        // For desktop we rely on the File's name + the drag/drop path injected
-        // by Tauri as `file.path` when available.
-        const fileAny = file as any;
-        const sourcePath = fileAny.path || fileAny.webkitRelativePath || file.name;
-
         setImportProgress(`Копирование ${file.name}...`);
-        const ok = await importFileToLibrary(sourcePath, file.name, libraryFolderUri);
+        // Android: файл уходит чанками через Kotlin-мост (из Blob нет пути).
+        // Desktop: Tauri подставляет file.path (drag&drop/input) — нативная копия.
+        const ok = await importFileToLibrary(file, file.name, libraryFolderUri);
         if (!ok) {
           throw new Error(`Не удалось скопировать ${file.name}`);
         }
@@ -677,7 +673,8 @@ function App() {
     }
   };
 
-  // Clear library database
+  // Clear library database (диалог обещает: «удалить базу данных и отвязать
+  // папку; файлы на устройстве останутся»)
   const handleClearLibrary = async () => {
     try {
       setIsImporting(true);
@@ -688,12 +685,20 @@ function App() {
         if (c.coverUrl) URL.revokeObjectURL(c.coverUrl);
       });
 
-      // Delete each comic
+      // Delete each comic + all shelves
       for (const comic of comics) {
         await deleteComic(comic.id);
       }
+      for (const shelf of shelves) {
+        await deleteShelf(shelf.id);
+      }
+
+      // Unlink the library folder so the "choose folder" screen shows again
+      localStorage.removeItem(FOLDER_STORAGE_KEY);
+      setLibraryFolderUri(null);
 
       setComics([]);
+      setShelves([]);
     } catch (err) {
       console.error('Failed to clear database:', err);
       await messageDialog('Ошибка при очистке библиотеки.');

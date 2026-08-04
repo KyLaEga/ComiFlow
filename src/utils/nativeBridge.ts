@@ -32,6 +32,12 @@ export const isTauri = (): boolean => {
   return !!(window as any).__TAURI_INTERNALS__ || !!(window as any).__TAURI__;
 };
 
+/** True inside the Tauri Android app (SAF content:// URIs, chunked import). */
+export const isAndroid = (): boolean => {
+  const ua = navigator.userAgent.toLowerCase();
+  return isTauri() && (ua.includes('android') || ua.includes('linux;'));
+};
+
 // ── Folder selection ──────────────────────────────────────────────────────
 
 /** Open a native folder picker and return the selected absolute path (or null). */
@@ -109,15 +115,73 @@ export async function deleteSAFFile(
   }
 }
 
-/** Import (copy) a file into the library folder. */
+/**
+ * Import (copy) a file into the library folder.
+ *
+ * - Desktop: the file's absolute path (`file.path`, injected by Tauri for
+ *   drag&drop / file inputs when available) is copied natively via Rust.
+ * - Android: `<input type=file>` exposes only a Blob, so the file is read in
+ *   ~1 MiB slices and streamed as base64 chunks to the Kotlin bridge, which
+ *   writes them to a temp file and copies it into the SAF library folder.
+ *
+ * `source` may also be an absolute path string (desktop-only callers, e.g.
+ * file-association intents) — then it is copied directly.
+ */
 export async function importFileToLibrary(
-  sourcePath: string,
+  source: File | string,
   cleanName: string,
-  libraryFolderPath: string
+  libraryFolder: string,
 ): Promise<boolean> {
   if (!isTauri()) return false;
+
+  // Android: chunked upload via the Kotlin bridge.
+  if (isAndroid() && source instanceof File) {
+    const CHUNK_SIZE = 1024 * 1024; // 1 MiB raw → ~1.37 MiB base64 per chunk
+    let importId: string | null = null;
+    try {
+      importId = await invoke<string | null>('start_chunked_import', {
+        fileName: cleanName,
+        fileSize: source.size,
+        libraryFolder,
+      });
+      if (!importId) return false;
+
+      for (let offset = 0; offset < source.size; offset += CHUNK_SIZE) {
+        const slice = source.slice(offset, offset + CHUNK_SIZE);
+        const bytes = new Uint8Array(await slice.arrayBuffer());
+        let binary = '';
+        // btoa() работает с бинарной строкой; 1 MiB — безопасный размер.
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        const ok = await invoke<boolean>('append_chunk', {
+          importId,
+          base64Data: btoa(binary),
+        });
+        if (!ok) return false;
+      }
+
+      return await invoke<boolean>('finish_chunked_import', { importId });
+    } catch (e) {
+      console.error('Tauri chunked import error:', e);
+      if (importId) {
+        invoke('cancel_chunked_import', { importId }).catch(() => {});
+      }
+      return false;
+    }
+  }
+
+  // Desktop / path-based import: native copy in Rust.
   try {
-    return await invoke<boolean>('import_file', { sourcePath, cleanName, libraryFolderPath });
+    const sourcePath =
+      source instanceof File
+        ? (source as any).path || (source as any).webkitRelativePath || source.name
+        : source;
+    return await invoke<boolean>('import_file', {
+      sourcePath,
+      cleanName,
+      libraryFolderPath: libraryFolder,
+    });
   } catch (e) {
     console.error('Tauri importFileToLibrary error:', e);
     return false;
@@ -198,31 +262,4 @@ export function getFileSrc(filePath: string): string {
     return convertFileSrc(filePath);
   }
   return filePath;
-}
-
-// ── Chunked import (legacy Capacitor API, unused in Tauri) ────────────────
-// Kept only so old call sites compile during migration; Tauri uses
-// importFileToLibrary() directly. These can be removed once App.tsx is cleaned.
-
-export async function copyContentUriToCache(uri: string): Promise<string | null> {
-  // On desktop the path is already accessible; no cache copy needed.
-  return uri;
-}
-
-export async function startChunkedImport(
-  _fileName: string,
-  _fileSize: number,
-  _libraryFolderPath: string
-): Promise<string | null> {
-  return null;
-}
-
-export async function appendChunk(_importId: string, _base64: string): Promise<boolean> {
-  return false;
-}
-
-export async function cancelChunkedImport(_importId: string): Promise<void> {}
-
-export async function finishChunkedImport(_importId: string): Promise<boolean> {
-  return false;
 }

@@ -4,7 +4,6 @@ import './index.css'
 import App from './App.tsx'
 import { Component } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
-import { isTauri } from './utils/nativeBridge'
 
 interface Props {
   children: ReactNode;
@@ -80,27 +79,3 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 )
-
-// Service Worker handling:
-// - Inside Tauri: NEVER register a PWA service worker. A SW that caches
-//   index.html causes white screens after every app update (stale cache).
-//   Also proactively unregister any legacy SW left from the Capacitor era.
-// - Plain web (dev server / PWA): register the SW only in production.
-if ('serviceWorker' in navigator) {
-  if (isTauri()) {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      for (const registration of registrations) {
-        registration.unregister();
-      }
-      if (registrations.length > 0) {
-        console.log('[ComiFlow] Unregistered legacy service worker(s) inside Tauri.');
-      }
-    });
-  } else if (import.meta.env.PROD) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then((reg) => console.log('ServiceWorker registered:', reg.scope))
-        .catch((err) => console.warn('ServiceWorker registration failed:', err));
-    });
-  }
-}

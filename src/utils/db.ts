@@ -69,6 +69,9 @@ initDb();
  *  2. Backfill `coverDataUrl` for records that only have a `coverBlob`, so the
  *     library grid can render reliably (Blobs can come back broken from
  *     IndexedDB after a structured clone in some webviews — strings cannot).
+ *  3. Drop the redundant `coverBlob` once `coverDataUrl` exists — хранение
+ *     обложки в двух форматах удваивает расход IndexedDB (для 1000 комиксов
+ *     это сотни МБ). Blob нужен только как временный носитель при импорте.
  */
 export async function migrateCovers(): Promise<void> {
   try {
@@ -96,6 +99,12 @@ export async function migrateCovers(): Promise<void> {
         } catch {
           /* ignore single-record failure */
         }
+      }
+
+      // 3. Drop the redundant Blob copy (data-URL is the source of truth).
+      if (value.coverDataUrl && value.coverBlob) {
+        value.coverBlob = null;
+        changed = true;
       }
 
       if (changed) {
@@ -140,10 +149,11 @@ export async function saveComic(
   const existing = await metadataStore.getItem<ComicMetadata>(id).catch(() => null);
 
   // Compress and resize the cover image to prevent DB storage bloat.
-  // Keep the existing cover if the caller passed null but we already had one
-  // (e.g. a progress-only update should not erase the cover).
-  const incomingCover = coverBlob ?? existing?.coverBlob ?? null;
-  const compressedCover = incomingCover ? await resizeCover(incomingCover) : null;
+  // Сжимаем ТОЛЬКО новый cover: если вызывающий не передал обложку
+  // (например, обновление прогресса чтения), существующую не трогаем —
+  // раньше она пересжималась и перекодировалась в data-URL при каждом
+  // перелистывании страницы, что было очень дорого для больших библиотек.
+  const compressedCover = coverBlob ? await resizeCover(coverBlob) : null;
 
   // Persist the cover also as a data-URL string. IndexedDB round-trips strings
   // reliably across webviews (Blobs can come back null/broken after a clone),
@@ -166,7 +176,8 @@ export async function saveComic(
     currentPage: existing?.currentPage ?? 0,
     totalPages: pages.length > 0 ? pages.length : (existing?.totalPages ?? 0),
     pages: pages.length > 0 ? pages : (existing?.pages ?? []),
-    coverBlob: compressedCover,
+    // Blob не храним: обложка живёт как coverDataUrl (см. migrateCovers).
+    coverBlob: null,
     coverDataUrl,
     format,
     uri,

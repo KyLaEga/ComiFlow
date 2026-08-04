@@ -34,6 +34,14 @@ fi
 cp "$SRC" "$DEST"
 echo "[setup-android-plugin] ComiFlowBridge.kt → $DEST"
 
+# MainActivity.kt: перехват клавиш громкости и кнопки «назад».
+# (gen/android/app/src/main/... тоже регенерируется `tauri android init`.)
+MAIN_SRC="$SCRIPT_DIR/mobile/android/MainActivity.kt"
+if [ -f "$MAIN_SRC" ]; then
+  cp "$MAIN_SRC" "$DEST_DIR/MainActivity.kt"
+  echo "[setup-android-plugin] MainActivity.kt → $DEST_DIR/MainActivity.kt"
+fi
+
 # Добавляем зависимость androidx.documentfile, если её ещё нет в build.gradle.kts.
 # (gen/android/app/build.gradle.kts тоже регенерируется, поэтому добавляем каждый раз.)
 # Делаем вставку через Python — это переносимо между macOS (BSD) и Linux (GNU),

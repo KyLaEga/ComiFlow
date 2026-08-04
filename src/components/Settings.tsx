@@ -49,7 +49,7 @@ const formatLibraryPath = (uri: string | null): string => {
       return pathPart;
     }
     return decoded;
-  } catch (e) {
+  } catch {
     return uri;
   }
 };
@@ -100,9 +100,9 @@ export const Settings: React.FC<SettingsProps> = ({
         
         setStorageUsage(`Хранилище: ${formatSize(usage)} из ${formatSize(quota)}`);
       }
-    } catch (e) {
-      console.warn('Failed to get storage estimate', e);
-    }
+      } catch {
+        console.warn('Failed to get storage estimate');
+      }
   };
 
   if (!isOpen) return null;

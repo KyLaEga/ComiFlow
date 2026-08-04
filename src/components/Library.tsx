@@ -31,7 +31,6 @@ interface ComicCardProps {
   comic: ComicMetadata;
   isSelectMode: boolean;
   selectedComicIds: Set<string>;
-  onSelectComic: (id: string) => void;
   onDeleteComic: (id: string) => void;
   onAssignComicToShelf: (comicId: string, shelfId: string | null) => void;
   shelves: Shelf[];
@@ -174,10 +173,6 @@ const ComicCard: React.FC<ComicCardProps> = ({
         >
           {comic.title}
         </h4>
-        {/* TEMP diagnostic badge — remove after fixing covers */}
-        <span style={{ fontSize: '8px', color: 'var(--text-muted)', display: 'block', marginBottom: '2px' }}>
-          {comic.coverDataUrl ? `data:${comic.coverDataUrl.length}` : comic.coverBlob ? `blob:${comic.coverBlob.size}` : 'NO-COVER'} | {comic.format} | {comic.pages?.length ?? 0}p
-        </span>
         <div className="card-meta">
           <span>{comic.totalPages} стр.</span>
           <span>{formatBytes(comic.size)}</span>
@@ -640,7 +635,6 @@ export const Library: React.FC<LibraryProps> = ({
                 comic={comic}
                 isSelectMode={isSelectMode}
                 selectedComicIds={selectedComicIds}
-                onSelectComic={onSelectComic}
                 onDeleteComic={onDeleteComic}
                 onAssignComicToShelf={onAssignComicToShelf}
                 shelves={shelves}

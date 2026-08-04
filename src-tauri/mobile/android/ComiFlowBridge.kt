@@ -92,6 +92,11 @@ class PageArgs {
     var pageName: String? = null
 }
 
+@InvokeArg
+class VolumeKeysArgs {
+    var enabled: Boolean = false
+}
+
 @TauriPlugin
 class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
 
@@ -160,13 +165,17 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /** Включает/выключает перехват клавиш громкости (читает MainActivity). */
     @Command
-    fun getLibraryFolderUri(invoke: Invoke) {
-        val uri = activity.getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE)
-            .getString(PREF_FOLDER_URI, null)
-        val ret = JSObject()
-        ret.put("uri", uri ?: JSONObject.NULL)
-        invoke.resolve(ret)
+    fun setVolumeKeysEnabled(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(VolumeKeysArgs::class.java)
+            activity.getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE)
+                .edit().putBoolean("volumeKeysEnabled", args.enabled).apply()
+            invoke.resolve(JSObject().apply { put("ok", true) })
+        } catch (ex: Exception) {
+            invoke.reject(ex.message ?: "volume keys failed")
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -218,7 +227,10 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                     }
 
                     val lower = displayName.lowercase()
-                    if (!lower.endsWith(".cbz") && !lower.endsWith(".zip") && !lower.endsWith(".pdf")) continue
+                    // Только .cbz/.pdf — совпадает с desktop-фильтром (Rust
+                    // file_metadata). Обычные .zip на десктопе не попадают
+                    // в библиотеку, чтобы не захламлять её архивами не-комиксов.
+                    if (!lower.endsWith(".cbz") && !lower.endsWith(".pdf")) continue
 
                     val size = c.getLong(2)
                     val lastModified = c.getLong(3)
@@ -330,7 +342,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                         if (!ze.isDirectory() && isImageFile(name)) {
                             pages.add(name)
                             val current = firstImage
-                            if (current == null || name.compareTo(current, ignoreCase = true) < 0) {
+                            if (current == null || naturalCompare(name, current) < 0) {
                                 firstImage = name
                             }
                         }
@@ -371,7 +383,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                                 if (!ze.isDirectory() && isImageFile(name)) {
                                     pages.add(name)
                                     val current = targetCover
-                                    if (current == null || name.compareTo(current, ignoreCase = true) < 0) targetCover = name
+                                    if (current == null || naturalCompare(name, current) < 0) targetCover = name
                                 }
                                 zis.closeEntry()
                                 ze = zis.nextEntry
@@ -412,7 +424,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             }
         }
 
-        pages.sortWith(Comparator { a, b -> a.compareTo(b, ignoreCase = true) })
+        pages.sortWith(naturalComparator)
 
         var coverBase64 = ""
         coverBytes?.let { bytes ->
@@ -463,6 +475,49 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") ||
             lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".bmp") ||
             lower.endsWith(".avif")
+    }
+
+    // ── Natural (human) sort: "page2.jpg" < "page10.jpg" ──────────────────
+    // На десктопе порядок страниц даёт Rust (core_base::natural_cmp); здесь
+    // повторяем ту же логику, чтобы порядок не зависел от платформы.
+    private val naturalComparator = Comparator<String> { a, b -> naturalCompare(a, b) }
+
+    private fun naturalCompare(a: String, b: String): Int {
+        val partsA = splitNatural(a)
+        val partsB = splitNatural(b)
+        var i = 0
+        while (i < partsA.size && i < partsB.size) {
+            val x = partsA[i]
+            val y = partsB[i]
+            val cmp = if (x[0].isDigit() && y[0].isDigit()) {
+                // Числовые куски сравниваем по значению, а не по строкам.
+                val xn = x.trimStart('0').toLongOrNull()
+                val yn = y.trimStart('0').toLongOrNull()
+                when {
+                    xn != null && yn != null -> xn.compareTo(yn)
+                    xn != null -> -1
+                    yn != null -> 1
+                    else -> x.compareTo(y, ignoreCase = true)
+                }
+            } else {
+                x.compareTo(y, ignoreCase = true)
+            }
+            if (cmp != 0) return cmp
+            i++
+        }
+        return a.length.compareTo(b.length)
+    }
+
+    private fun splitNatural(s: String): List<String> {
+        val parts = ArrayList<String>()
+        var i = 0
+        while (i < s.length) {
+            val start = i
+            val isDigit = s[i].isDigit()
+            while (i < s.length && s[i].isDigit() == isDigit) i++
+            parts.add(s.substring(start, i))
+        }
+        return parts
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -688,37 +743,14 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
     }
 
     @Command
-    fun copyContentUriToCache(invoke: Invoke) {
-        try {
-            val args = invoke.parseArgs(UriArgs::class.java)
-            val uri = Uri.parse(args.uri ?: "")
-            var fileName = "temp_comic.cbz"
-            activity.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                val nameIndex = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameIndex != -1 && c.moveToFirst()) fileName = c.getString(nameIndex)
-            }
-            fileName = fileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            val tempFile = File(activity.cacheDir, "open_${System.currentTimeMillis()}_$fileName")
-            activity.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    val buf = ByteArray(8192)
-                    var n = input.read(buf)
-                    while (n != -1) { output.write(buf, 0, n); n = input.read(buf) }
-                }
-            } ?: run { invoke.reject("open failed"); return }
-            invoke.resolve(JSObject().apply { put("path", tempFile.absolutePath) })
-        } catch (ex: Exception) {
-            invoke.reject(ex.message ?: "copy failed")
-        }
-    }
-
-    @Command
     fun clearImportCache(invoke: Invoke) {
         try {
             val cacheDir = activity.cacheDir
             if (cacheDir.isDirectory) {
                 cacheDir.listFiles()?.forEach { f ->
-                    if (f.name.startsWith("open_") && f.isFile) f.delete()
+                    // open_* — старые копии файлов, chunk_* — незавершённые
+                    // чанковые импорты; и те, и другие можно смело чистить.
+                    if (f.isFile && (f.name.startsWith("open_") || f.name.startsWith("chunk_"))) f.delete()
                 }
             }
             invoke.resolve(JSObject().apply { put("ok", true) })
