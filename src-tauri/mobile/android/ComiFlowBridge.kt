@@ -93,8 +93,8 @@ class PageArgs {
 }
 
 @InvokeArg
-class VolumeKeysArgs {
-    var enabled: Boolean = false
+class VolumeKeyModeArgs {
+    var mode: String? = null // "off" | "single" | "auto"
 }
 
 @TauriPlugin
@@ -165,16 +165,22 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /** Включает/выключает перехват клавиш громкости (читает MainActivity). */
+    /**
+     * Задаёт режим листания кнопками громкости (читает MainActivity):
+     *  - "off"    — клавиши громкости не перехватываются (системная громкость);
+     *  - "single" — одна страница на одно нажатие (удержание не листает);
+     *  - "auto"   — при удержании страницы листаются непрерывно (скорость — на JS).
+     */
     @Command
-    fun setVolumeKeysEnabled(invoke: Invoke) {
+    fun setVolumeKeyMode(invoke: Invoke) {
         try {
-            val args = invoke.parseArgs(VolumeKeysArgs::class.java)
+            val args = invoke.parseArgs(VolumeKeyModeArgs::class.java)
+            val mode = args.mode ?: "off"
             activity.getSharedPreferences(PREFS_NAME, Activity.MODE_PRIVATE)
-                .edit().putBoolean("volumeKeysEnabled", args.enabled).apply()
+                .edit().putString("volumeKeyMode", mode).apply()
             invoke.resolve(JSObject().apply { put("ok", true) })
         } catch (ex: Exception) {
-            invoke.reject(ex.message ?: "volume keys failed")
+            invoke.reject(ex.message ?: "volume key mode failed")
         }
     }
 

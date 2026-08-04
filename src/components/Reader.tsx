@@ -70,6 +70,17 @@ interface DrawerComicCardProps {
   onClick: () => void;
 }
 
+/** Интервал автопропрутки (мс между страницами) для режима "auto". */
+const VOLUME_AUTO_SPEED_MS: Record<ReaderSettings['volumeKeySpeed'], number> = {
+  slow: 700,
+  normal: 350,
+  fast: 150,
+};
+
+/** Если события от кнопки громкости пропали дольше этого времени (мс) —
+ *  автопропрутка останавливается сама (защита от потерянного ACTION_UP). */
+const AUTO_TURN_WATCHDOG_MS = 1500;
+
 const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick }) => {
   const progressPercent = c.totalPages > 0 
     ? Math.round((c.currentPage / (c.totalPages - 1 || 1)) * 100) 
@@ -543,52 +554,117 @@ export const Reader: React.FC<ReaderProps> = ({
     }
   };
 
-  // Keyboard navigation & Volume keys overrides
+  // Keyboard navigation (стрелки / пробел; клавиши громкости приходят
+  // нативным путём — см. обработчик nativeVolumeKey ниже)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Paged navigation
-      if (settings.mode === 'paged') {
-        if (e.key === 'ArrowRight' || e.key === ' ') {
-          e.preventDefault();
-          turnPage('next');
-        } else if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          turnPage('prev');
-        }
-      }
-
-      // Volume buttons page turning (VolumeUp / VolumeDown overrides)
-      if (settings.volumeKeysEnabled) {
-        if (e.key === 'VolumeUp' || e.key === 'AudioVolumeUp') {
-          e.preventDefault();
-          turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
-        } else if (e.key === 'VolumeDown' || e.key === 'AudioVolumeDown') {
-          e.preventDefault();
-          turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
-        }
+      if (settings.mode !== 'paged') return;
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault();
+        turnPage('next');
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        turnPage('prev');
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [settings.mode, settings.volumeKeysEnabled, settings.direction, turnPage]);
+  }, [settings.mode, turnPage]);
 
-  // Listener for native volume keys override (dispatched from Java)
+  // Native volume keys (события от MainActivity с repeat-счётчиком):
+  //  - "single" — одна страница на одно нажатие (повторы удержания игнорируются);
+  //  - "auto"   — repeat=0 листает и запускает непрерывную автопропрутку
+  //               с интервалом VOLUME_AUTO_SPEED_MS; repeat=-1 (ACTION_UP)
+  //               останавливает её.
+  //
+  // Автопропрутка — цепочка setTimeout (не setInterval): каждый тик
+  // перепланируется, беря СВЕЖИЕ turnPage/currentPage через refs (иначе
+  // замыкание захватит устаревшую страницу и уедет за конец книги).
+  // Watchdog: если события от кнопки пропали (up потерян системой) дольше
+  // AUTO_TURN_WATCHDOG_MS — пропрутка останавливается сама.
+  const autoTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoTurnLastEventRef = useRef(0);
+  const turnPageRef = useRef(turnPage);
+  const currentPageRef = useRef(currentPage);
   useEffect(() => {
+    turnPageRef.current = turnPage;
+  }, [turnPage]);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  const stopAutoTurn = useCallback(() => {
+    if (autoTurnTimerRef.current) {
+      clearTimeout(autoTurnTimerRef.current);
+      autoTurnTimerRef.current = null;
+    }
+  }, []);
+
+  // Рекурсивная цепочка: чтобы не ссылаться на саму себя в инициализаторе
+  // (TS7022), храним функцию в ref и вызываем через него.
+  const scheduleAutoTurnRef = useRef<(dir: 'next' | 'prev') => void>(() => {});
+
+  const scheduleAutoTurn = useCallback((dir: 'next' | 'prev') => {
+    if (autoTurnTimerRef.current) clearTimeout(autoTurnTimerRef.current);
+    autoTurnTimerRef.current = setTimeout(() => {
+      autoTurnTimerRef.current = null;
+      // Стоп на границах книги.
+      if (dir === 'next' && currentPageRef.current >= comic.totalPages - 1) return;
+      if (dir === 'prev' && currentPageRef.current <= 0) return;
+      // Стоп, если события от кнопки пропали (up мог потеряться).
+      if (Date.now() - autoTurnLastEventRef.current > AUTO_TURN_WATCHDOG_MS) return;
+      turnPageRef.current(dir);
+      scheduleAutoTurnRef.current(dir);
+    }, VOLUME_AUTO_SPEED_MS[settings.volumeKeySpeed]);
+  }, [comic.totalPages, settings.volumeKeySpeed]);
+
+  scheduleAutoTurnRef.current = scheduleAutoTurn;
+
+  useEffect(() => {
+    if (settings.volumeKeysEnabled === 'off') return;
+
     const handleNativeVolumeKey = (e: Event) => {
-      if (!settings.volumeKeysEnabled) return;
-      const customEvent = e as CustomEvent<{ key: 'volume_up' | 'volume_down' }>;
-      const keyType = customEvent.detail.key;
-      if (keyType === 'volume_up') {
-        turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
-      } else if (keyType === 'volume_down') {
-        turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
+      const ce = e as CustomEvent<{ key: 'volume_up' | 'volume_down'; repeat: number }>;
+      const { key, repeat } = ce.detail;
+      const isLtr = settings.direction === 'ltr';
+      const dir: 'next' | 'prev' = key === 'volume_up'
+        ? (isLtr ? 'prev' : 'next')
+        : (isLtr ? 'next' : 'prev');
+
+      // Отпускание кнопки → стоп автопропрутки.
+      if (repeat === -1) {
+        stopAutoTurn();
+        return;
+      }
+
+      autoTurnLastEventRef.current = Date.now();
+
+      if (settings.volumeKeysEnabled === 'auto') {
+        // Первое нажатие: листаем и запускаем непрерывную цепочку.
+        // Повторы (repeat>0) только обновляют watchdog — цепочка уже идёт.
+        if (repeat === 0) {
+          stopAutoTurn();
+          turnPageRef.current(dir);
+          scheduleAutoTurn(dir);
+        }
+      } else {
+        // "single": листаем только на первое нажатие; удержание не листает.
+        if (repeat === 0) {
+          turnPageRef.current(dir);
+        }
       }
     };
 
     window.addEventListener('nativeVolumeKey', handleNativeVolumeKey);
-    return () => window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
-  }, [settings.volumeKeysEnabled, settings.direction, turnPage]);
+    return () => {
+      window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
+      stopAutoTurn();
+    };
+    // ВАЖНО: turnPage НЕ в deps — иначе эффект перезапускался бы на каждом
+    // листании (turnPage меняется вместе с currentPage) и cleanup убивал бы
+    // цепочку автопропрутки. Вместо этого используем свежий turnPageRef.
+  }, [settings.volumeKeysEnabled, settings.volumeKeySpeed, settings.direction, stopAutoTurn, scheduleAutoTurn]);
 
   // Webtoon scroll dynamic page visibility callback
   const handlePageVisibleInWebtoon = useCallback((index: number) => {

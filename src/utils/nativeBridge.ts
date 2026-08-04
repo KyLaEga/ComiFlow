@@ -200,11 +200,13 @@ export async function clearImportCache(): Promise<void> {
 
 // ── Desktop-only stubs ────────────────────────────────────────────────────
 
-/** Volume-key override is Android-only; no-op on desktop. */
-export async function setVolumeKeysEnabled(_enabled: boolean): Promise<void> {
+/** Режим листания клавишами громкости (Android; на desktop — no-op). */
+export type VolumeKeyMode = 'off' | 'single' | 'auto';
+
+export async function setVolumeKeyMode(mode: VolumeKeyMode): Promise<void> {
   if (!isTauri()) return;
   try {
-    await invoke('set_volume_keys_enabled', { enabled: _enabled });
+    await invoke('set_volume_key_mode', { mode });
   } catch {
     /* ignore */
   }

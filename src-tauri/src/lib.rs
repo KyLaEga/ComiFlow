@@ -504,19 +504,19 @@ fn clear_import_cache() {
     // No-op on desktop — caches are managed by the web layer.
 }
 
-/// Включить/выключить перехват клавиш громкости.
-/// Android: флаг сохраняется в SharedPreferences, его читает MainActivity
+/// Задать режим листания клавишами громкости: "off" | "single" | "auto".
+/// Android: режим сохраняется в SharedPreferences, его читает MainActivity
 /// (диспетчеризует `nativeVolumeKey`-события в WebView). Desktop: no-op.
 #[tauri::command]
-fn set_volume_keys_enabled(
+fn set_volume_key_mode(
     #[allow(unused_variables)] app: tauri::AppHandle,
-    enabled: bool,
+    mode: String,
 ) -> bool {
     #[cfg(target_os = "android")]
     {
         if let Some(bridge) = android_bridge(&app) {
-            let payload = serde_json::json!({ "enabled": enabled });
-            let resp: Option<AndroidOkResp> = bridge.call("setVolumeKeysEnabled", payload);
+            let payload = serde_json::json!({ "mode": mode });
+            let resp: Option<AndroidOkResp> = bridge.call("setVolumeKeyMode", payload);
             return resp.map(|r| r.ok).unwrap_or(false);
         }
         return false;
@@ -524,7 +524,7 @@ fn set_volume_keys_enabled(
 
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (app, enabled);
+        let _ = mode;
         true
     }
 }
@@ -759,7 +759,7 @@ pub fn run() {
             get_cbz_page,
             delete_file,
             clear_import_cache,
-            set_volume_keys_enabled,
+            set_volume_key_mode,
             get_pending_file_uri,
             select_library_folder,
             import_file,

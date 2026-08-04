@@ -18,7 +18,11 @@ export interface ReaderSettings {
   fitMode: 'contain' | 'width' | 'height';
   splitDoublePages: boolean;
   zoomLock: boolean;
-  volumeKeysEnabled: boolean;
+  /** Режим листания клавишами громкости: off — выкл, single — по одной
+   *  странице на нажатие, auto — непрерывная автопропрутка при удержании. */
+  volumeKeysEnabled: 'off' | 'single' | 'auto';
+  /** Скорость автопропрутки (режим 'auto'): интервал между страницами. */
+  volumeKeySpeed: 'slow' | 'normal' | 'fast';
   brightness: number; // 50 to 150
   contrast: number; // 50 to 150
   deletePhysicalFile?: boolean; // legacy, migrated to deleteMode
@@ -407,15 +411,49 @@ export const Settings: React.FC<SettingsProps> = ({
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
               <Volume2 size={16} /> Листать кнопками громкости
             </span>
-            <label className="switch-control">
-              <input
-                type="checkbox"
-                checked={settings.volumeKeysEnabled}
-                onChange={(e) => onUpdateSettings({ volumeKeysEnabled: e.target.checked })}
-              />
-              <span className="switch-slider"></span>
-            </label>
           </div>
+          <div className="segmented-control" style={{ marginBottom: settings.volumeKeysEnabled === 'auto' ? '8px' : '0' }}>
+            <button
+              className={`segmented-btn ${settings.volumeKeysEnabled === 'off' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ volumeKeysEnabled: 'off' })}
+            >
+              Выкл
+            </button>
+            <button
+              className={`segmented-btn ${settings.volumeKeysEnabled === 'single' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ volumeKeysEnabled: 'single' })}
+            >
+              По одной
+            </button>
+            <button
+              className={`segmented-btn ${settings.volumeKeysEnabled === 'auto' ? 'active' : ''}`}
+              onClick={() => onUpdateSettings({ volumeKeysEnabled: 'auto' })}
+            >
+              Автопропрутка
+            </button>
+          </div>
+          {settings.volumeKeysEnabled === 'auto' && (
+            <div className="segmented-control" style={{ marginBottom: '8px' }}>
+              <button
+                className={`segmented-btn ${settings.volumeKeySpeed === 'slow' ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ volumeKeySpeed: 'slow' })}
+              >
+                Медленно
+              </button>
+              <button
+                className={`segmented-btn ${settings.volumeKeySpeed === 'normal' ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ volumeKeySpeed: 'normal' })}
+              >
+                Нормально
+              </button>
+              <button
+                className={`segmented-btn ${settings.volumeKeySpeed === 'fast' ? 'active' : ''}`}
+                onClick={() => onUpdateSettings({ volumeKeySpeed: 'fast' })}
+              >
+                Быстро
+              </button>
+            </div>
+          )}
 
           {/* Deletion mode: full-width select (like the theme select above) so
               the long Russian option text never overflows the narrow panel. */}

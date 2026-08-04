@@ -22,7 +22,7 @@ import {
   deleteSAFFile,
   importFileToLibrary,
   clearImportCache,
-  setVolumeKeysEnabled,
+  setVolumeKeyMode,
   getPendingFileUri,
   getFileSrc,
   confirmDialog,
@@ -75,7 +75,8 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   fitMode: 'contain',
   splitDoublePages: true,
   zoomLock: false,
-  volumeKeysEnabled: false,
+  volumeKeysEnabled: 'off',
+  volumeKeySpeed: 'normal',
   brightness: 100,
   contrast: 100,
   deleteMode: 'off',
@@ -309,9 +310,18 @@ function App() {
             parsed.deleteMode = parsed.deletePhysicalFile === true ? 'permanent' : 'off';
           }
           delete parsed.deletePhysicalFile;
+          // Migrate legacy volumeKeysEnabled: boolean → режим листания.
+          // Old "true" becomes 'single' (по одной странице на нажатие);
+          // anything else falls back to 'off'.
+          if (parsed.volumeKeysEnabled !== undefined && typeof parsed.volumeKeysEnabled !== 'string') {
+            parsed.volumeKeysEnabled = parsed.volumeKeysEnabled === true ? 'single' : 'off';
+          }
+          if (parsed.volumeKeySpeed === undefined) {
+            parsed.volumeKeySpeed = 'normal';
+          }
           setSettings({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme });
           if (parsed.volumeKeysEnabled !== undefined) {
-            setVolumeKeysEnabled(parsed.volumeKeysEnabled);
+            setVolumeKeyMode(parsed.volumeKeysEnabled);
           }
           // Persist the migration so we don't re-normalize every launch.
           if (parsed.theme !== normalizedTheme || parsed.deletePhysicalFile !== undefined) {
@@ -392,7 +402,7 @@ function App() {
       const updated = { ...prev, ...newSettings };
       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
       if (newSettings.volumeKeysEnabled !== undefined) {
-        setVolumeKeysEnabled(newSettings.volumeKeysEnabled);
+        setVolumeKeyMode(newSettings.volumeKeysEnabled);
       }
       return updated;
     });

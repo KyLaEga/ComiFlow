@@ -1,11 +1,11 @@
 // ComiFlow MainActivity (Android).
 //
 // Расширяет сгенерированный TauriActivity:
-//  1. Клавиши громкости — перехватываются, когда включена настройка
-//     «Листать кнопками громкости» (флаг volumeKeysEnabled хранится в
-//     SharedPreferences, его пишет ComiFlowBridge.setVolumeKeysEnabled).
-//     Событие уходит в WebView как `nativeVolumeKey` CustomEvent — его
-//     слушает Reader.tsx.
+//  1. Клавиши громкости — перехватываются, когда включён режим листания
+//     (строка volumeKeyMode в SharedPreferences: "off"|"single"|"auto", её
+//     пишет ComiFlowBridge.setVolumeKeyMode). События уходят в WebView как
+//     `nativeVolumeKey` CustomEvent — их слушает Reader.tsx (учитывает
+//     repeatCount для автопропрутки при удержании).
 //  2. Системная кнопка «назад» — уходит в WebView как `comiflow:backbutton`
 //     (слушает App.tsx): закрывает читалку → настройки → режим выбора → выход.
 //     Иначе в SPA-приложении «назад» сразу закрывает приложение.
@@ -58,17 +58,21 @@ class MainActivity : TauriActivity() {
         val code = event.keyCode
 
         // ── Клавиши громкости → листание страниц ─────────────────────────
+        // Режим ("off"|"single"|"auto") хранится в SharedPreferences,
+        // его пишет ComiFlowBridge.setVolumeKeyMode. В WebView уходит:
+        //  - ACTION_DOWN  → { key, repeat: repeatCount } (repeat>0 = удержание);
+        //  - ACTION_UP    → { key, repeat: -1 } (отпускание → остановить автопропрутку).
         if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
             val prefs = getSharedPreferences("ComiFlowPrefs", MODE_PRIVATE)
-            if (prefs.getBoolean("volumeKeysEnabled", false)) {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    val key = if (code == KeyEvent.KEYCODE_VOLUME_UP) "volume_up" else "volume_down"
-                    webView?.post {
-                        webView?.evaluateJavascript(
-                            "window.dispatchEvent(new CustomEvent('nativeVolumeKey',{detail:{key:'$key'}}));",
-                            null
-                        )
-                    }
+            val mode = prefs.getString("volumeKeyMode", "off") ?: "off"
+            if (mode != "off") {
+                val key = if (code == KeyEvent.KEYCODE_VOLUME_UP) "volume_up" else "volume_down"
+                val repeat = if (event.action == KeyEvent.ACTION_DOWN) event.repeatCount else -1
+                webView?.post {
+                    webView?.evaluateJavascript(
+                        "window.dispatchEvent(new CustomEvent('nativeVolumeKey',{detail:{key:'$key',repeat:$repeat}}));",
+                        null
+                    )
                 }
                 return true // не даём системе менять громкость
             }
