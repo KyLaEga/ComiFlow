@@ -97,6 +97,11 @@ class VolumeKeyModeArgs {
     var mode: String? = null // "off" | "single" | "auto"
 }
 
+@InvokeArg
+class ReaderActiveArgs {
+    var active: Boolean = false
+}
+
 @TauriPlugin
 class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
 
@@ -181,6 +186,23 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             invoke.resolve(JSObject().apply { put("ok", true) })
         } catch (ex: Exception) {
             invoke.reject(ex.message ?: "volume key mode failed")
+        }
+    }
+
+    /**
+     * Включает/выключает «читательские» жесты: когда читалка открыта,
+     * боковые края экрана исключаются из системной жесты-навигации
+     * (свайп от края = «назад»), чтобы свайпы листания страниц работали
+     * от самого края. Выход — кнопка «Назад» в HUD или аппаратная клавиша.
+     */
+    @Command
+    fun setReaderActive(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(ReaderActiveArgs::class.java)
+            (activity as? MainActivity)?.setReaderGesturesActive(args.active)
+            invoke.resolve(JSObject().apply { put("ok", true) })
+        } catch (ex: Exception) {
+            invoke.reject(ex.message ?: "set reader active failed")
         }
     }
 
@@ -327,7 +349,9 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun parseCbz(uri: Uri, result: JSONObject) {
-        val pages = ArrayList<String>()
+        // Пары (имя страницы, пропорция w/h) — сортируем вместе, чтобы
+        // aspectRatios соответствовал pages после natural-сортировки.
+        val pageEntries = ArrayList<Pair<String, Float?>>()
         var coverBytes: ByteArray? = null
         var parsed = false
 
@@ -346,7 +370,14 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                         val ze = entries.nextElement() as ZipEntry
                         val name = ze.getName() ?: continue
                         if (!ze.isDirectory() && isImageFile(name)) {
-                            pages.add(name)
+                            val ratio = runCatching {
+                                zf.getInputStream(ze).use { input ->
+                                    val header = ByteArray(8192)
+                                    val n = input.read(header)
+                                    parseImageDimension(header, n)
+                                }
+                            }.getOrNull()
+                            pageEntries.add(name to ratio)
                             val current = firstImage
                             if (current == null || naturalCompare(name, current) < 0) {
                                 firstImage = name
@@ -373,7 +404,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
 
         // Fallback: streaming double-pass
         if (!parsed) {
-            pages.clear()
+            pageEntries.clear()
             coverBytes = null
             var targetCover: String? = null
             try {
@@ -387,7 +418,16 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                             while (ze != null) {
                                 val name = ze.getName() ?: ""
                                 if (!ze.isDirectory() && isImageFile(name)) {
-                                    pages.add(name)
+                                    // Читаем только заголовок записи для пропорций;
+                                    // closeEntry ниже дочитает остаток.
+                                    val header = ByteArray(8192)
+                                    var n = 0
+                                    while (n < header.size) {
+                                        val r = zis.read(header, n, header.size - n)
+                                        if (r == -1) break
+                                        n += r
+                                    }
+                                    pageEntries.add(name to parseImageDimension(header, n))
                                     val current = targetCover
                                     if (current == null || naturalCompare(name, current) < 0) targetCover = name
                                 }
@@ -430,7 +470,9 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             }
         }
 
-        pages.sortWith(naturalComparator)
+        pageEntries.sortWith(Comparator { a, b -> naturalCompare(a.first, b.first) })
+        val pages = ArrayList(pageEntries.map { it.first })
+        val ratios = pageEntries.map { it.second }
 
         var coverBase64 = ""
         coverBytes?.let { bytes ->
@@ -469,9 +511,53 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
 
         val pagesArray = JSONArray()
         for (p in pages) pagesArray.put(p)
+        val ratiosArray = JSONArray()
+        for (r in ratios) ratiosArray.put(r ?: JSONObject.NULL)
         result.put("format", "cbz")
         result.put("pages", pagesArray)
+        result.put("aspectRatios", ratiosArray)
         result.put("coverBase64", coverBase64)
+    }
+
+    /**
+     * Пропорция (ширина/высота) изображения по первым байтам заголовка.
+     * Поддерживает PNG и JPEG; для остальных форматов — null (webtoon-лента
+     * использует запасной placeholder, лента не «прыгает» при загрузке).
+     */
+    private fun parseImageDimension(header: ByteArray, len: Int): Float? {
+        if (len < 4) return null
+        // PNG: 89 50 4E 47 0D 0A 1A 0A + IHDR (ширина/высота на смещении 16/20)
+        if (len >= 24 &&
+            header[0] == 0x89.toByte() && header[1] == 0x50.toByte() &&
+            header[2] == 0x4E.toByte() && header[3] == 0x47.toByte()
+        ) {
+            val w = ((header[16].toInt() and 0xFF) shl 24) or ((header[17].toInt() and 0xFF) shl 16) or
+                ((header[18].toInt() and 0xFF) shl 8) or (header[19].toInt() and 0xFF)
+            val h = ((header[20].toInt() and 0xFF) shl 24) or ((header[21].toInt() and 0xFF) shl 16) or
+                ((header[22].toInt() and 0xFF) shl 8) or (header[23].toInt() and 0xFF)
+            if (w > 0 && h > 0) return w.toFloat() / h.toFloat()
+        }
+        // JPEG: FF D8 ... ищем маркер SOF (C0-CF, кроме C4/C8/CC) — высота/ширина
+        if (header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte()) {
+            var i = 2
+            while (i + 9 < len) {
+                if (header[i].toInt() and 0xFF != 0xFF) {
+                    i++
+                    continue
+                }
+                val marker = header[i + 1].toInt() and 0xFF
+                val isSof = marker in 0xC0..0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
+                if (isSof) {
+                    val h = ((header[i + 5].toInt() and 0xFF) shl 8) or (header[i + 6].toInt() and 0xFF)
+                    val w = ((header[i + 7].toInt() and 0xFF) shl 8) or (header[i + 8].toInt() and 0xFF)
+                    if (w > 0 && h > 0) return w.toFloat() / h.toFloat()
+                }
+                val segLen = ((header[i + 2].toInt() and 0xFF) shl 8) or (header[i + 3].toInt() and 0xFF)
+                if (segLen < 2) return null
+                i += 2 + segLen
+            }
+        }
+        return null
     }
 
     private fun isImageFile(filename: String): Boolean {

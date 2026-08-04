@@ -21,6 +21,9 @@ export interface ComicMetadata {
   currentPage: number;
   totalPages: number;
   pages: string[]; // List of file names inside the zip (sorted)
+  /** Пропорции страниц (w/h) в том же порядке, что pages — webtoon-лента
+   *  резервирует реальную высоту ДО загрузки изображений (без «прыжков»). */
+  aspectRatios?: (number | null)[];
   coverUrl?: string; // Temporarily created Object URL for rendering
   coverBlob: Blob | null; // Saved Blob of the first page (used by Reader)
   /**
@@ -141,7 +144,8 @@ export async function saveComic(
   uri: string,
   format: 'cbz' | 'pdf',
   shelfId: string | null = null,
-  metadataError: string | null = null
+  metadataError: string | null = null,
+  aspectRatios?: (number | null)[]
 ): Promise<ComicMetadata> {
   // Preserve immutable identity/progress fields when updating an existing comic
   // (otherwise re-saving metadata during lazy-load would wipe reading progress
@@ -176,6 +180,7 @@ export async function saveComic(
     currentPage: existing?.currentPage ?? 0,
     totalPages: pages.length > 0 ? pages.length : (existing?.totalPages ?? 0),
     pages: pages.length > 0 ? pages : (existing?.pages ?? []),
+    aspectRatios: aspectRatios && aspectRatios.length > 0 ? aspectRatios : (existing?.aspectRatios ?? undefined),
     // Blob не храним: обложка живёт как coverDataUrl (см. migrateCovers).
     coverBlob: null,
     coverDataUrl,

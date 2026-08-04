@@ -3,6 +3,7 @@ import { updateComicProgress } from '../utils/db';
 import type { ComicMetadata } from '../utils/db';
 import { getPageBlob } from '../utils/cbz';
 import { getPdfPageBlob, clearPDFCache, clearPdfPageCache } from '../utils/pdf';
+import { setReaderActive } from '../utils/nativeBridge';
 import type { ReaderSettings } from './Settings';
 import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X } from 'lucide-react';
 
@@ -487,7 +488,11 @@ export const Reader: React.FC<ReaderProps> = ({
   // Unmount cleanup: object-URL страниц + кэши (по рефам — ревок никогда
   // не сработает во время активного отображения страницы).
   useEffect(() => {
+    // Пока читалка открыта — боковые края экрана не перехватываются
+    // системной жесты-навигацией Android (свайпы листания от края).
+    setReaderActive(true);
     return () => {
+      setReaderActive(false);
       if (pageUrlRef.current) URL.revokeObjectURL(pageUrlRef.current);
       if (nextPageUrlRef.current) URL.revokeObjectURL(nextPageUrlRef.current);
       clearPDFCache();
@@ -638,15 +643,20 @@ export const Reader: React.FC<ReaderProps> = ({
         return;
       }
 
-      autoTurnLastEventRef.current = Date.now();
-
       if (settings.volumeKeysEnabled === 'auto') {
-        // Первое нажатие: листаем и запускаем непрерывную цепочку.
-        // Повторы (repeat>0) только обновляют watchdog — цепочка уже идёт.
         if (repeat === 0) {
-          stopAutoTurn();
+          // Первое нажатие: листаем ровно ОДНУ страницу и НЕ запускаем
+          // цепочку — она стартует только когда система подтвердит
+          // удержание (repeat>0). Короткий тап больше никогда не даст
+          // «самопроизвольную» серию листаний.
+          autoTurnLastEventRef.current = Date.now();
           turnPageRef.current(dir);
-          scheduleAutoTurn(dir);
+        } else if (repeat > 0) {
+          // Удержание подтверждено: запускаем/продолжаем автопропрутку.
+          autoTurnLastEventRef.current = Date.now();
+          if (!autoTurnTimerRef.current) {
+            scheduleAutoTurn(dir);
+          }
         }
       } else {
         // "single": листаем только на первое нажатие; удержание не листает.
@@ -699,8 +709,11 @@ export const Reader: React.FC<ReaderProps> = ({
     lastTapTime.current = now;
   };
 
-  // Pointer dragging (Panning when zoomed, swiping when 1x zoom)
+  // Pointer dragging (Panning when zoomed, swiping when 1x zoom).
+  // Обработчики висят на .reader-viewport (общий родитель hotspots и
+  // paged-container); в webtoon-режиме они неактивны (там своя прокрутка).
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (settings.mode !== 'paged') return;
     if (zoomScale === 1) {
       handleDoubleTap(e.clientX, e.clientY);
       // Track swipes only in paged mode
@@ -721,6 +734,7 @@ export const Reader: React.FC<ReaderProps> = ({
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    if (settings.mode !== 'paged') return;
     if (zoomScale === 1) {
       if (!isSwipeDragging.current) return;
       const deltaX = e.clientX - touchStartX.current;
@@ -741,10 +755,15 @@ export const Reader: React.FC<ReaderProps> = ({
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (settings.mode !== 'paged') return;
     if (zoomScale === 1) {
       if (!isSwipeDragging.current) return;
       isSwipeDragging.current = false;
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* pointer capture мог уже сняться системой — не критично */
+      }
       
       const deltaX = e.clientX - touchStartX.current;
       setSwipeTranslation(0); // Trigger snap back transition
@@ -814,9 +833,16 @@ export const Reader: React.FC<ReaderProps> = ({
       </div>
 
       {/* Viewport Area */}
+      {/* Pointer-обработчики свайпов/пана здесь: nav-hotspot'ы — сиблинги
+          paged-container (оба внутри viewport), поэтому события от них
+          всплывают только до viewport'а. */}
       <div 
         className={`reader-viewport ${settings.mode === 'webtoon' ? 'webtoon-mode' : ''}`}
-        ref={settings.mode === 'webtoon' ? webtoonContainerRef : null}
+        ref={settings.mode === 'webtoon' ? webtoonContainerRef : viewportRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         {/* Hotspots for Paged turning */}
         {settings.mode === 'paged' && zoomScale === 1 && (
@@ -853,6 +879,7 @@ export const Reader: React.FC<ReaderProps> = ({
                 fetchPageBlob={fetchPageBlob}
                 onVisible={handlePageVisibleInWebtoon}
                 filterStyles={filterStyles}
+                aspectRatio={comic.aspectRatios?.[idx] ?? null}
               />
             ))}
           </div>
@@ -862,11 +889,7 @@ export const Reader: React.FC<ReaderProps> = ({
         {settings.mode === 'paged' && pageUrl && (
           <div className="paged-container">
             <div
-              ref={viewportRef}
               className="page-image-wrapper"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
               style={{
                 transform: `translate(${panOffset.x + swipeTranslation}px, ${panOffset.y}px) scale(${zoomScale})`,
                 transition: swipeTranslation === 0 ? 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none',
@@ -1091,17 +1114,24 @@ interface WebtoonPageWrapperProps {
   fetchPageBlob: (index: number) => Promise<Blob>;
   onVisible: (index: number) => void;
   filterStyles: React.CSSProperties;
+  /** Реальная пропорция страницы (w/h) из метаданных — резервирует высоту
+   *  ДО загрузки картинки, чтобы лента не «прыгала» при скролле. */
+  aspectRatio: number | null;
 }
 
 const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = React.memo(
-  ({ index, fetchPageBlob, onVisible, filterStyles }) => {
+  ({ index, fetchPageBlob, onVisible, filterStyles, aspectRatio }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [imgUrl, setImgUrl] = useState<string | null>(null);
-    const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+    const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
     // Реф владеет URL: observer-колбэк читает/пишет его, а state только
     // отражает текущий URL для отрисовки. Раньше `imgUrl` был в deps —
     // cleanup ревокал URL ещё показываемой картинки (гонка с async-загрузкой).
     const imgUrlRef = useRef<string | null>(null);
+
+    // Плейсхолдер резервирует РЕАЛЬНУЮ высоту страницы (из метаданных),
+    // поэтому при загрузке картинки лента не сдвигается.
+    const displayRatio = loadedRatio ?? aspectRatio;
 
     const setUrl = (url: string | null) => {
       imgUrlRef.current = url;
@@ -1157,7 +1187,7 @@ const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = React.memo(
     const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
       const img = e.currentTarget;
       if (img.naturalWidth && img.naturalHeight) {
-        setAspectRatio(img.naturalWidth / img.naturalHeight);
+        setLoadedRatio(img.naturalWidth / img.naturalHeight);
       }
     };
 
@@ -1167,7 +1197,7 @@ const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = React.memo(
         id={`webtoon-page-${index}`}
         style={{
           width: '100%',
-          aspectRatio: aspectRatio ? `${aspectRatio}` : '2/3',
+          aspectRatio: displayRatio ? `${displayRatio}` : '2/3',
           backgroundColor: '#000000',
           minHeight: '200px',
           display: 'flex',

@@ -434,6 +434,7 @@ function App() {
         let pages: string[];
         let coverBlob: Blob | null = null;
         let errorMsg: string | null = null;
+        let aspectRatios: (number | null)[] | undefined;
 
         if (pending.format === 'pdf') {
           // PDF: Rust doesn't parse PDFs, so we render the cover + count pages
@@ -464,6 +465,7 @@ function App() {
             pages = [];
           } else {
             pages = metadata.pages;
+            aspectRatios = metadata.aspectRatios;
             if (metadata.coverBase64) {
               coverBlob = base64ToBlob(metadata.coverBase64);
             }
@@ -482,7 +484,7 @@ function App() {
         const saved = await saveComic(
           pending.id, pending.title, pending.size, pages, coverBlob,
           pending.uri, pending.format || 'cbz', pending.shelfId || null,
-          errorMsg
+          errorMsg, aspectRatios
         );
         setComics((prev) => prev.map((c) => (c.id === saved.id ? saved : c)));
       } catch (err) {
@@ -606,7 +608,8 @@ function App() {
         }
         comic = await saveComic(
           comic.id, comic.title, comic.size, metadata.pages, coverBlob,
-          comic.uri, metadata.format || 'cbz', comic.shelfId || null
+          comic.uri, metadata.format || 'cbz', comic.shelfId || null,
+          undefined, metadata.aspectRatios
         );
 
         const list = await getAllComics();

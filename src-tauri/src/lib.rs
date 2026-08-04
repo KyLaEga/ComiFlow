@@ -127,6 +127,11 @@ struct ComicMetadata {
     total_pages: usize,
     #[serde(rename = "coverBase64")]
     cover_base64: Option<String>,
+    /// Пропорции страниц (ширина/высота) в том же порядке, что `pages`.
+    /// Позволяет webtoon-ленте резервировать реальную высоту страниц ДО
+    /// загрузки изображений — без «прыжков» ленты при скролле.
+    #[serde(rename = "aspectRatios")]
+    aspect_ratios: Option<Vec<Option<f32>>>,
     error: Option<String>,
 }
 
@@ -139,6 +144,7 @@ impl ComicMetadata {
             pages: Vec::new(),
             total_pages: 0,
             cover_base64: None,
+            aspect_ratios: None,
             error: Some(msg.into()),
         }
     }
@@ -213,9 +219,11 @@ fn file_metadata(path: &Path) -> Option<FileMeta> {
     Some(FileMeta { name, size })
 }
 
-/// Parse a CBZ/CBZ-like zip: returns (sorted page names, cover bytes).
+/// Parse a CBZ/CBZ-like zip: returns (sorted page names, cover bytes,
+/// aspect ratios (w/h) of each page — used by the webtoon reader to reserve
+/// the real height of pages before the images are loaded (no layout jumps).
 #[cfg_attr(target_os = "android", allow(dead_code))]
-fn parse_cbz(path: &Path) -> Result<(Vec<String>, Option<Vec<u8>>), String> {
+fn parse_cbz(path: &Path) -> Result<(Vec<String>, Option<Vec<u8>>, Vec<Option<f32>>), String> {
     let file = fs::File::open(path).map_err(|e| format!("Не удалось открыть файл: {e}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|e| format!("Не удалось прочитать архив: {e}"))?;
@@ -250,7 +258,59 @@ fn parse_cbz(path: &Path) -> Result<(Vec<String>, Option<Vec<u8>>), String> {
         }
     }
 
-    Ok((image_names, cover_bytes))
+    // Пропорции страниц: читаем только заголовки (8 КБ на страницу) — это
+    // быстро даже для больших архивов и не грузит изображения в память.
+    let mut aspect_ratios = Vec::with_capacity(image_names.len());
+    for name in &image_names {
+        let ratio = archive.by_name(name).ok().and_then(|mut entry| {
+            let mut header = [0u8; 8192];
+            let n = entry.read(&mut header).unwrap_or(0);
+            image_dimensions(&header[..n]).map(|(w, h)| w as f32 / h as f32)
+        });
+        aspect_ratios.push(ratio);
+    }
+
+    Ok((image_names, cover_bytes, aspect_ratios))
+}
+
+/// Пропорции (w/h) изображения по его первым байтам. Поддерживает PNG и JPEG
+/// (главные форматы страниц комиксов); для остальных возвращает None —
+/// webtoon-лента использует запасной placeholder.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+fn image_dimensions(header: &[u8]) -> Option<(u32, u32)> {
+    // PNG: сигнатура + IHDR (ширина/высота на фикс. смещении 16/20).
+    if header.len() >= 24 && &header[0..8] == b"\x89PNG\r\n\x1a\n" {
+        let w = u32::from_be_bytes([header[16], header[17], header[18], header[19]]);
+        let h = u32::from_be_bytes([header[20], header[21], header[22], header[23]]);
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
+    }
+    // JPEG: ищем маркер SOF0..SOF15 (кроме DHT/DAC/RST) — там высота/ширина.
+    if header.len() >= 4 && header[0] == 0xFF && header[1] == 0xD8 {
+        let mut i = 2usize;
+        while i + 9 < header.len() {
+            if header[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            let marker = header[i + 1];
+            let is_sof = matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+            if is_sof {
+                let h = u16::from_be_bytes([header[i + 5], header[i + 6]]);
+                let w = u16::from_be_bytes([header[i + 7], header[i + 8]]);
+                if w > 0 && h > 0 {
+                    return Some((w as u32, h as u32));
+                }
+            }
+            let seg_len = u16::from_be_bytes([header[i + 2], header[i + 3]]) as usize;
+            if seg_len < 2 {
+                return None;
+            }
+            i += 2 + seg_len;
+        }
+    }
+    None
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────
@@ -353,6 +413,7 @@ fn get_comic_metadata_desktop(file_path: String) -> String {
             pages: Vec::new(),
             total_pages: 0,
             cover_base64: None,
+            aspect_ratios: None,
             error: None,
         })
         .unwrap_or_else(|_| "{}".to_string());
@@ -361,7 +422,7 @@ fn get_comic_metadata_desktop(file_path: String) -> String {
     // CBZ / ZIP: parse on the server for speed and to avoid shipping the
     // whole archive to JS just to read the cover.
     match parse_cbz(path) {
-        Ok((pages, cover_bytes)) => {
+        Ok((pages, cover_bytes, aspect_ratios)) => {
             let cover_ext = pages.first().map(|p| file_extension(p)).unwrap_or("");
             let cover_base64 = cover_bytes.map(|bytes| {
                 let b64 = general_purpose::STANDARD.encode(&bytes);
@@ -374,6 +435,7 @@ fn get_comic_metadata_desktop(file_path: String) -> String {
                 total_pages: pages.len(),
                 pages,
                 cover_base64,
+                aspect_ratios: Some(aspect_ratios),
                 error: None,
             })
             .unwrap_or_else(|_| "{}".to_string())
@@ -631,6 +693,31 @@ fn get_pending_file_uri() -> Option<String> {
     None
 }
 
+/// Включает/выключает «читательские» жесты: пока читалка открыта, боковые
+/// края исключаются из системной жесты-навигации Android (иначе свайп от
+/// края — «назад» — не даёт листать страницы от края). Desktop: no-op.
+#[tauri::command]
+fn set_reader_active(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    active: bool,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "active": active });
+            let resp: Option<AndroidOkResp> = bridge.call("setReaderActive", payload);
+            return resp.map(|r| r.ok).unwrap_or(false);
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = active;
+        true
+    }
+}
+
 #[tauri::command]
 async fn select_library_folder(app: tauri::AppHandle) -> Option<String> {
     #[cfg(target_os = "android")]
@@ -761,6 +848,7 @@ pub fn run() {
             clear_import_cache,
             set_volume_key_mode,
             get_pending_file_uri,
+            set_reader_active,
             select_library_folder,
             import_file,
             start_chunked_import,

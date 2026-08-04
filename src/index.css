@@ -561,6 +561,9 @@ body::-webkit-scrollbar {
   align-items: center;
   justify-content: center;
   position: relative;
+  /* Свайпы листания обрабатываются вручную — не даём браузеру канселить
+     pointer-события (скролл/зум) на Android. */
+  touch-action: none;
 }
 
 .page-image-wrapper {
@@ -609,6 +612,9 @@ body::-webkit-scrollbar {
   width: 25%;
   z-index: 102;
   cursor: pointer;
+  /* Свайпы листания начинаются и на hotspot'ах — запрещаем браузерный
+     скролл/зум (Android WebView смотрит touch-action и на таргете). */
+  touch-action: none;
 }
 
 .nav-hotspot-left {

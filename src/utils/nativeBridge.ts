@@ -23,6 +23,8 @@ export interface ComicMetadataNative {
   pages: string[];
   totalPages: number;
   coverBase64: string | null;
+  /** Пропорции страниц (w/h), в том же порядке, что pages. */
+  aspectRatios?: (number | null)[];
   error?: string;
 }
 
@@ -207,6 +209,20 @@ export async function setVolumeKeyMode(mode: VolumeKeyMode): Promise<void> {
   if (!isTauri()) return;
   try {
     await invoke('set_volume_key_mode', { mode });
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Включает/выключает «читательские» жесты (Android): пока читалка открыта,
+ * боковые края исключаются из системной жесты-навигации, чтобы свайпы
+ * листания работали от самого края экрана.
+ */
+export async function setReaderActive(active: boolean): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    await invoke('set_reader_active', { active });
   } catch {
     /* ignore */
   }

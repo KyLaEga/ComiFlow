@@ -54,6 +54,28 @@ class MainActivity : TauriActivity() {
         super.onWebViewCreate(webView)
     }
 
+    /**
+     * Исключает боковые края экрана из системной жесты-навигации, пока
+     * открыта читалка: свайпы листания страниц работают от самого края,
+     * а не перехватываются системным жестом «назад».
+     */
+    fun setReaderGesturesActive(active: Boolean) {
+        val decor = window?.decorView ?: return
+        if (active) {
+            val w = resources.displayMetrics.widthPixels
+            val h = resources.displayMetrics.heightPixels
+            val inset = (28 * resources.displayMetrics.density).toInt()
+            decor.setSystemGestureExclusionRects(
+                listOf(
+                    android.graphics.Rect(0, 0, inset, h),      // левый край
+                    android.graphics.Rect(w - inset, 0, w, h)   // правый край
+                )
+            )
+        } else {
+            decor.setSystemGestureExclusionRects(emptyList())
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
 
