@@ -40,6 +40,9 @@ export interface ParsedPDF {
   title: string;
   totalPages: number;
   coverBlob: Blob;
+  /** Пропорции страниц (w/h) в порядке следования — для webtoon-ленты
+   *  резервируется реальная высота, чтобы лента не «прыгала» при загрузке. */
+  aspectRatios: (number | null)[];
 }
 
 /**
@@ -88,10 +91,25 @@ export async function parsePDF(file: File | Blob, originalName: string): Promise
 
   const title = originalName.replace(/\.[^/.]+$/, "");
 
+  // Пропорции всех страниц (w/h). getPage без рендера — быстрая операция,
+  // но для очень больших PDF соберём максимум разумно: на 1000+ страниц
+  // этот анализ всё равно разовый (выполняется при первом открытии).
+  const aspectRatios: (number | null)[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    try {
+      const p = await pdf.getPage(i);
+      const vp = p.getViewport({ scale: 1.0 });
+      aspectRatios.push(vp.width / vp.height);
+    } catch {
+      aspectRatios.push(null);
+    }
+  }
+
   return {
     title,
     totalPages: pdf.numPages,
     coverBlob,
+    aspectRatios,
   };
 }
 

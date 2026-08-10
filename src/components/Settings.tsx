@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2, ArrowUpDown } from 'lucide-react';
+import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2, Gauge } from 'lucide-react';
 import { confirmDialog } from '../utils/nativeBridge';
 
 export interface ReaderSettings {
@@ -27,7 +27,6 @@ export interface ReaderSettings {
   contrast: number; // 50 to 150
   deletePhysicalFile?: boolean; // legacy, migrated to deleteMode
   deleteMode?: 'off' | 'trash' | 'permanent';
-  fastScrollPosition?: 'left' | 'right' | 'disabled';
 }
 
 const formatLibraryPath = (uri: string | null): string => {
@@ -277,36 +276,6 @@ export const Settings: React.FC<SettingsProps> = ({
         </div>
 
         {/* Fast Scroll Handle Position (Only for Webtoon Mode) */}
-        {settings.mode === 'webtoon' && (
-          <div className="settings-section">
-            <span className="settings-section-title">
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                <ArrowUpDown size={14} /> Быстрая прокрутка (ползунок)
-              </span>
-            </span>
-            <div className="segmented-control">
-              <button
-                className={`segmented-btn ${settings.fastScrollPosition === 'left' ? 'active' : ''}`}
-                onClick={() => onUpdateSettings({ fastScrollPosition: 'left' })}
-              >
-                Слева
-              </button>
-              <button
-                className={`segmented-btn ${settings.fastScrollPosition === 'right' ? 'active' : ''}`}
-                onClick={() => onUpdateSettings({ fastScrollPosition: 'right' })}
-              >
-                Справа
-              </button>
-              <button
-                className={`segmented-btn ${settings.fastScrollPosition === 'disabled' || !settings.fastScrollPosition ? 'active' : ''}`}
-                onClick={() => onUpdateSettings({ fastScrollPosition: 'disabled' })}
-              >
-                Отключена
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Page Fitting (Only for Paged Mode) */}
         {settings.mode === 'paged' && (
           <div className="settings-section">
@@ -412,7 +381,7 @@ export const Settings: React.FC<SettingsProps> = ({
               <Volume2 size={16} /> Листать кнопками громкости
             </span>
           </div>
-          <div className="segmented-control" style={{ marginBottom: settings.volumeKeysEnabled === 'auto' ? '8px' : '0' }}>
+          <div className="segmented-control" style={{ marginBottom: '6px' }}>
             <button
               className={`segmented-btn ${settings.volumeKeysEnabled === 'off' ? 'active' : ''}`}
               onClick={() => onUpdateSettings({ volumeKeysEnabled: 'off' })}
@@ -432,8 +401,27 @@ export const Settings: React.FC<SettingsProps> = ({
               Автопропрутка
             </button>
           </div>
-          {settings.volumeKeysEnabled === 'auto' && (
-            <div className="segmented-control" style={{ marginBottom: '8px' }}>
+          {/* Подсказка: что делает выбранный режим (чтобы «Выкл» не вызывал
+              вопросов, а «Автопропрутка» не путала с автоскроллом ленты). */}
+          <div style={{ fontSize: '12px', lineHeight: 1.4, opacity: 0.65, marginBottom: '10px' }}>
+            {settings.volumeKeysEnabled === 'off' && 'Кнопки громкости не листают страницы.'}
+            {settings.volumeKeysEnabled === 'single' && 'Одно нажатие кнопки громкости — одна страница.'}
+            {settings.volumeKeysEnabled === 'auto' && 'Удерживайте кнопку громкости — страницы листаются непрерывно.'}
+          </div>
+
+          {/* Скорость автопропрутки. Видна ВСЕГДА (не только в режиме «Автопропрутка»),
+              но активна только в нём — чтобы настройка не «пропадала». */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '4px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '14px' }}>
+              <Gauge size={16} /> Скорость автопропрутки
+            </span>
+            <div
+              className="segmented-control"
+              style={{
+                opacity: settings.volumeKeysEnabled === 'auto' ? 1 : 0.45,
+                pointerEvents: settings.volumeKeysEnabled === 'auto' ? 'auto' : 'none',
+              }}
+            >
               <button
                 className={`segmented-btn ${settings.volumeKeySpeed === 'slow' ? 'active' : ''}`}
                 onClick={() => onUpdateSettings({ volumeKeySpeed: 'slow' })}
@@ -453,7 +441,12 @@ export const Settings: React.FC<SettingsProps> = ({
                 Быстро
               </button>
             </div>
-          )}
+            {settings.volumeKeysEnabled !== 'auto' && (
+              <div style={{ fontSize: '12px', opacity: 0.65 }}>
+                Доступна в режиме «Автопропрутка»
+              </div>
+            )}
+          </div>
 
           {/* Deletion mode: full-width select (like the theme select above) so
               the long Russian option text never overflows the narrow panel. */}

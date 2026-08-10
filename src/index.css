@@ -533,7 +533,9 @@ body::-webkit-scrollbar {
   overflow-y: auto;
   overflow-x: hidden;
   display: block;
-  scroll-behavior: smooth;
+  /* 'auto', а не 'smooth': программные прыжки (ползунок, кнопки, автопропрутка)
+     выполняются мгновенно, без «пролистывания» через все страницы ленты. */
+  scroll-behavior: auto;
   height: 100%;
 }
 
@@ -698,6 +700,31 @@ body::-webkit-scrollbar {
   align-items: center;
   gap: 16px;
 }
+
+.autoplay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: 0 2px 10px var(--shadow);
+}
+
+.autoplay-pill.paused {
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
 
 .page-slider {
   flex: 1;
