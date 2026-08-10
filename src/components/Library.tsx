@@ -24,6 +24,8 @@ interface LibraryProps {
   onSyncLibrary: () => void;
   isSelectMode: boolean;
   setIsSelectMode: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Запросить обложку комикса по требованию (карточка в окне просмотра). */
+  onLoadCover?: (comicId: string) => void;
   initialScrollTop?: number;
 }
 
@@ -36,6 +38,7 @@ interface ComicCardProps {
   shelves: Shelf[];
   handleCardClick: (id: string) => void;
   formatBytes: (bytes: number) => string;
+  onLoadCover?: (comicId: string) => void;
 }
 
 const ComicCard: React.FC<ComicCardProps> = ({
@@ -46,9 +49,12 @@ const ComicCard: React.FC<ComicCardProps> = ({
   onAssignComicToShelf,
   shelves,
   handleCardClick,
-  formatBytes
+  formatBytes,
+  onLoadCover
 }) => {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const coverRequestedRef = useRef(false);
 
   useEffect(() => {
     // Prefer the persisted data-URL (reliably survives IndexedDB round-trips).
@@ -76,10 +82,31 @@ const ComicCard: React.FC<ComicCardProps> = ({
     }
   }, [comic.coverDataUrl, comic.coverBlob]);
 
+  // Обложка по требованию: карточка попала в окно просмотра, а обложки ещё
+  // нет — запрашиваем её сразу (быстрый нативный запрос только обложки),
+  // не дожидаясь, пока фоновая очередь дойдёт до файла по порядку.
+  useEffect(() => {
+    if (comic.coverDataUrl || comic.metadataError || coverRequestedRef.current || !onLoadCover) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          coverRequestedRef.current = true;
+          onLoadCover(comic.id);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '800px 0px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [comic.id, comic.coverDataUrl, comic.metadataError, onLoadCover]);
+
   const progressPercent = Math.round((comic.currentPage / (comic.totalPages - 1 || 1)) * 100);
 
   return (
-    <div className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
+    <div ref={cardRef} className={`comic-card ${selectedComicIds.has(comic.id) ? 'selected' : ''}`} style={{ border: selectedComicIds.has(comic.id) ? '2px solid var(--accent)' : undefined }}>
       {/* Actions overlay */}
       <div className="card-actions-overlay">
         <button
@@ -220,6 +247,7 @@ export const Library: React.FC<LibraryProps> = ({
   onSyncLibrary,
   isSelectMode,
   setIsSelectMode,
+  onLoadCover,
   initialScrollTop,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -640,6 +668,7 @@ export const Library: React.FC<LibraryProps> = ({
                 shelves={shelves}
                 handleCardClick={handleCardClick}
                 formatBytes={formatBytes}
+                onLoadCover={onLoadCover}
               />
             );
           }}

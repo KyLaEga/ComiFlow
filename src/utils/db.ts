@@ -75,15 +75,31 @@ initDb();
  *  3. Drop the redundant `coverBlob` once `coverDataUrl` exists — хранение
  *     обложки в двух форматах удваивает расход IndexedDB (для 1000 комиксов
  *     это сотни МБ). Blob нужен только как временный носитель при импорте.
+ *  4. Re-encode oversized data-URL covers (старые версии хранили полные
+ *     обложки в base64 — это и есть основные сотни МБ). Работа идёт с
+ *     лимитом времени на запуск (COMPRESS_BUDGET_MS), продолжается при
+ *     следующих запусках, пока не кончатся «толстые» обложки.
  */
 export async function migrateCovers(): Promise<void> {
   try {
     const keys = await metadataStore.keys();
+    let budget = COMPRESS_BUDGET_MS;
     for (const key of keys) {
       const value = await metadataStore.getItem<ComicMetadata>(key);
       if (!value) continue;
 
       let changed = false;
+
+      // 4. Re-encode oversized data-URL covers (only while budget remains).
+      if (budget > 0 && value.coverDataUrl && value.coverDataUrl.length > COVER_DATAURL_TOO_BIG) {
+        const t0 = performance.now();
+        const shrunk = await shrinkDataUrl(value.coverDataUrl);
+        if (shrunk && shrunk.length < value.coverDataUrl.length) {
+          value.coverDataUrl = shrunk;
+          changed = true;
+        }
+        budget -= performance.now() - t0;
+      }
 
       // 1. Compress oversized covers.
       if (value.coverBlob && value.coverBlob.size > 120 * 1024) {
@@ -119,6 +135,46 @@ export async function migrateCovers(): Promise<void> {
   }
 }
 
+/** Бюджет на перекодировку старых «толстых» обложек за один запуск (мс). */
+const COMPRESS_BUDGET_MS = 3000;
+/** data-URL длиннее этого (≈120 КБ бинарных) считается «толстой» обложкой. */
+const COVER_DATAURL_TOO_BIG = 160 * 1024;
+
+/** Перекодирует data-URL обложки через canvas в WebP ≤480px; null при сбое. */
+async function shrinkDataUrl(dataUrl: string): Promise<string | null> {
+  try {
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('decode failed'));
+    });
+    const maxDim = 480;
+    let { width, height } = img;
+    if (width <= 0 || height <= 0) return null;
+    if (width > height && width > maxDim) {
+      height = Math.round((height * maxDim) / width);
+      width = maxDim;
+    } else if (height > maxDim) {
+      width = Math.round((width * maxDim) / height);
+      height = maxDim;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, width, height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/webp', 0.8));
+    if (!blob) return null;
+    return await blobToDataUrl(blob);
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * Get all comics metadata from database
@@ -126,10 +182,15 @@ export async function migrateCovers(): Promise<void> {
 export async function getAllComics(): Promise<ComicMetadata[]> {
   const comics: ComicMetadata[] = [];
   await metadataStore.iterate<ComicMetadata, void>((value) => {
+    // Защита от битых записей (старые версии/оборванные миграции):
+    // мусор не должен ронять всю библиотеку или вешать синхронизацию.
+    if (!value || typeof value !== 'object' || typeof (value as any).id !== 'string') {
+      return;
+    }
     comics.push(value);
   });
-  // Sort by addedAt descending
-  return comics.sort((a, b) => b.addedAt - a.addedAt);
+  // Sort by addedAt descending (записи без addedAt — в конец)
+  return comics.sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
 }
 
 /**
@@ -209,6 +270,20 @@ export async function updateComicProgress(
     metadata.lastReadAt = Date.now();
     await metadataStore.setItem(id, metadata);
   }
+}
+
+/**
+ * Обновить обложку комикса (data-URL) без перезаписи остальных полей —
+ * используется библиотекой для «обложки на лету», когда карточка попадает
+ * в окно просмотра, а фоновая очередь ещё не обработала файл.
+ */
+export async function updateComicCover(id: string, coverDataUrl: string): Promise<ComicMetadata | null> {
+  const metadata = await metadataStore.getItem<ComicMetadata>(id).catch(() => null);
+  if (!metadata) return null;
+  metadata.coverDataUrl = coverDataUrl;
+  metadata.coverBlob = null;
+  await metadataStore.setItem(id, metadata);
+  return metadata;
 }
 
 /**

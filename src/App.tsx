@@ -10,7 +10,8 @@ import {
   saveShelf,
   deleteShelf,
   assignComicToShelf,
-  migrateCovers
+  migrateCovers,
+  updateComicCover,
 } from './utils/db';
 import type { ComicMetadata, Shelf } from './utils/db';
 import { BookOpen, Settings as SettingsIcon } from 'lucide-react';
@@ -19,6 +20,7 @@ import {
   selectLibraryFolder as bridgeSelectLibraryFolder,
   listLibraryFiles,
   getComicMetadataNative,
+  isAndroid,
   deleteSAFFile,
   importFileToLibrary,
   clearImportCache,
@@ -27,11 +29,38 @@ import {
   getFileSrc,
   confirmDialog,
   messageDialog,
+  fetchCoverNative,
 } from './utils/nativeBridge';
+import { invoke } from '@tauri-apps/api/core';
 import { base64ToBlob } from './utils/pageUtils';
 
 import { Reader } from './components/Reader';
 import { Settings } from './components/Settings';
+
+// Диагностика: JS-ошибки и unhandled rejections уходят в logcat через
+// Rust (console в release-сборке недоступен).
+if (isTauri()) {
+  window.addEventListener('error', (e) => {
+    invoke('log_js', { msg: `window.onerror: ${e.message} @ ${e.filename}:${e.lineno}` }).catch(() => {});
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason instanceof Error ? e.reason.message : String(e.reason);
+    invoke('log_js', { msg: `unhandledrejection: ${reason}` }).catch(() => {});
+  });
+
+  // Очистка устаревших кэшей: старая Capacitor-версия оставила в WebView
+  // Service Worker + CacheStorage (это и были десятки МБ «мусора» в размере
+  // приложения). Приложение полностью локальное — кэши не нужны, чистим
+  // при каждом старте (main thread не блокирует: всё асинхронно).
+  if ('caches' in window) {
+    caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {});
+  }
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then((regs) => regs.forEach((r) => r.unregister()))
+      .catch(() => {});
+  }
+}
 
 
 const LOCAL_STORAGE_KEY = 'comiflow_settings';
@@ -80,8 +109,11 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   brightness: 100,
   contrast: 100,
   deleteMode: 'off',
-  fastScrollPosition: 'right',
 };
+
+/** data-URL обложки длиннее этого (~120 КБ бинарных) считается «толстой» —
+ *  такие пережимаются фоновой очередью через нативный get_cover (480px). */
+const BIG_COVER_DATAURL_LEN = 160 * 1024;
 
 // Persisted library folder (Tauri desktop) so it survives restarts.
 const FOLDER_STORAGE_KEY = 'comiflow_library_folder';
@@ -112,6 +144,38 @@ function App() {
 
   const libraryScrollYRef = useRef<number>(0);
 
+  // Обложки «на лету»: набор id, для которых запрос уже выполняется —
+  // защита от дублей, когда несколько карточек в окне просмотра просят
+  // обложку одного комикса одновременно.
+  const coverLoadsInFlight = useRef<Set<string>>(new Set());
+  // Обложки, которые уже пытались пережать (и не получилось — например,
+  // desktop, где нативного get_cover нет): не пробуем их повторно.
+  const coverRefreshAttempted = useRef<Set<string>>(new Set());
+
+  // Загрузить обложку комикса по требованию (карточка попала в окно
+  // просмотра, а фоновая очередь метаданных ещё не обработала файл).
+  // Быстрый нативный запрос только обложки (Kotlin, сжатие до 480px) —
+  // пользователь видит обложки сразу, а не по очереди сверху вниз.
+  const handleLoadCover = useCallback(async (comicId: string) => {
+    if (coverLoadsInFlight.current.has(comicId)) return;
+    const comic = comics.find((c) => c.id === comicId);
+    if (!comic || comic.coverDataUrl || comic.metadataError) return;
+    coverLoadsInFlight.current.add(comicId);
+    try {
+      const dataUrl = await fetchCoverNative(comic.uri, comic.format || 'cbz');
+      if (dataUrl) {
+        const updated = await updateComicCover(comicId, dataUrl);
+        if (updated) {
+          setComics((prev) => prev.map((c) => (c.id === comicId ? { ...c, coverDataUrl: dataUrl } : c)));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load cover on demand:', err);
+    } finally {
+      coverLoadsInFlight.current.delete(comicId);
+    }
+  }, [comics]);
+
   // Keep refs for the hardware back handler to avoid re-binding it
   const activeComicIdRef = useRef<string | null>(null);
   const isSettingsOpenRef = useRef<boolean>(false);
@@ -132,7 +196,12 @@ function App() {
   // Hardware back button (Tauri Android). Handled via the app event plugin if available.
   useEffect(() => {
     const onBackButton = () => {
-      if (activeComicIdRef.current) {
+      // Порядок важен: «назад» закрывает самый верхний слой. Настройки
+      // открываются ПОВЕРХ читалки (HUD → шестерёнка), поэтому сначала
+      // закрываем их, и только потом — комикс.
+      if (isSettingsOpenRef.current) {
+        setIsSettingsOpen(false);
+      } else if (activeComicIdRef.current) {
         setActiveComicId(null);
         setActiveComicFile(null);
         requestAnimationFrame(() => {
@@ -140,8 +209,6 @@ function App() {
         });
         clearImportCache();
         getAllComics().then((list) => setComics(list));
-      } else if (isSettingsOpenRef.current) {
-        setIsSettingsOpen(false);
       } else if (isSelectModeRef.current) {
         setIsSelectMode(false);
       } else if (isTauri()) {
@@ -206,8 +273,13 @@ function App() {
       let deletedCount = 0;
       for (const comic of existingComics) {
         if (!safUris.has(comic.uri)) {
-          await deleteComic(comic.id);
-          deletedCount++;
+          try {
+            await deleteComic(comic.id);
+            deletedCount++;
+          } catch (err) {
+            // Битая запись не должна прерывать синхронизацию остальных.
+            console.error('Failed to delete stale comic', comic.id, err);
+          }
         }
       }
 
@@ -241,8 +313,31 @@ function App() {
           const isPdf = file.name.toLowerCase().endsWith('.pdf');
           const format = isPdf ? 'pdf' : 'cbz';
           const title = file.name.replace(/\.[^/.]+$/, "");
-          await saveComic(id, title, file.size, [], null, file.uri, format, targetShelfId);
-          importedCount++;
+          try {
+            await saveComic(id, title, file.size, [], null, file.uri, format, targetShelfId);
+            importedCount++;
+          } catch (err) {
+            console.error('Failed to import comic', file.name, err);
+          }
+        }
+      }
+
+      // Сброс metadataError у существующих файлов: код мог починиться
+      // (например, PDF теперь обрабатывается нативным рендерером), а файл —
+      // замениться. Очередь метаданных попробует обработать их заново.
+      let resetErrors = 0;
+      for (const comic of existingComics) {
+        if (comic.metadataError && safUris.has(comic.uri)) {
+          try {
+            await saveComic(
+              comic.id, comic.title, comic.size, comic.pages ?? [],
+              null, comic.uri, comic.format || 'cbz', comic.shelfId ?? null,
+              null, comic.aspectRatios
+            );
+            resetErrors++;
+          } catch (err) {
+            console.error('Failed to reset metadataError', comic.id, err);
+          }
         }
       }
 
@@ -262,7 +357,7 @@ function App() {
         setShelves(updatedShelvesList);
       }
 
-      if (deletedCount > 0 || importedCount > 0) {
+      if (deletedCount > 0 || importedCount > 0 || resetErrors > 0) {
         setComics(finalComics);
       }
     } catch (err) {
@@ -335,17 +430,13 @@ function App() {
         }
       }
 
-      // Restore previously selected library folder BEFORE showing any UI,
-      // so the "choose folder" screen never flashes for returning users.
-      // Ждём завершения тихой синхронизации ДО чтения полок/комиксов:
-      // иначе гонка — sync() создаёт полки из подпапок, а параллельное
-      // getAllShelves() может перезаписать их пустым списком.
+      // Восстанавливаем выбранную папку ДО показа UI, чтобы экран
+      // «выберите папку» не мигал у вернувшихся пользователей.
+      // БД читаем СРАЗУ и показываем, что есть; тихая синхронизация идёт
+      // фоном и сама обновит состояние (comics/shelves) по завершении —
+      // так библиотека не «зависает» пустой, если синк встречает битую
+      // запись или старые данные из предыдущей версии.
       const storedFolder = getStoredFolder();
-      if (storedFolder) {
-        setLibraryFolderUri(storedFolder);
-        await syncLibrary(storedFolder, true).catch(err => console.error('bg sync failed', err));
-      }
-
       try {
         const [comicList, shelfList] = await Promise.all([getAllComics(), getAllShelves()]);
         if (cancelled) return;
@@ -353,6 +444,11 @@ function App() {
         setShelves(shelfList);
       } catch (err) {
         console.error('Failed to load library/shelves:', err);
+      }
+
+      if (storedFolder) {
+        setLibraryFolderUri(storedFolder);
+        syncLibrary(storedFolder, true).catch(err => console.error('bg sync failed', err));
       }
 
       if (cancelled) return;
@@ -427,7 +523,40 @@ function App() {
           (!c.pages || c.pages.length === 0) &&
           !c.metadataError
       );
-      if (!pending) return;
+
+      // Метаданных больше нет — пережимаем «толстые» обложки старых версий
+      // (полноразмерные base64 — сотни КБ на комикс, из-за них БД разрослась
+      // до ~150 МБ). Новый нативный get_cover отдаёт 480px JPEG (~30-45 КБ).
+      if (!pending) {
+        const target = comics.find(
+          (c) =>
+            !!c.coverDataUrl &&
+            c.coverDataUrl.length > BIG_COVER_DATAURL_LEN &&
+            !coverLoadsInFlight.current.has(c.id) &&
+            !coverRefreshAttempted.current.has(c.id)
+        );
+        if (!target) return;
+        coverLoadsInFlight.current.add(target.id);
+        try {
+          const dataUrl = await fetchCoverNative(target.uri, target.format || 'cbz');
+          const oldLen = target.coverDataUrl?.length ?? 0;
+          if (dataUrl && dataUrl.length < oldLen) {
+            const updated = await updateComicCover(target.id, dataUrl);
+            if (updated) {
+              setComics((prev) => prev.map((c) => (c.id === target.id ? { ...c, coverDataUrl: dataUrl } : c)));
+            }
+          } else if (!dataUrl) {
+            // Натив недоступен (desktop) — больше не пробуем.
+            coverRefreshAttempted.current.add(target.id);
+          }
+        } catch (err) {
+          coverRefreshAttempted.current.add(target.id);
+          console.error('Failed to refresh cover:', err);
+        } finally {
+          coverLoadsInFlight.current.delete(target.id);
+        }
+        return;
+      }
 
       setIsProcessingQueue(true);
       try {
@@ -437,20 +566,36 @@ function App() {
         let aspectRatios: (number | null)[] | undefined;
 
         if (pending.format === 'pdf') {
-          // PDF: Rust doesn't parse PDFs, so we render the cover + count pages
-          // here via pdf.js, fetching the file straight from disk.
-          try {
-            const res = await fetch(getFileSrc(pending.uri));
-            if (!res.ok) throw new Error('Не удалось прочитать PDF.');
-            const pdfBlob = await res.blob();
-            const pdfFile = new File([pdfBlob], pending.title, { type: 'application/pdf' });
-            const { parsePDF } = await import('./utils/pdf');
-            const parsed = await parsePDF(pdfFile, pending.title);
-            pages = Array.from({ length: parsed.totalPages }, (_, i) => String(i + 1));
-            coverBlob = parsed.coverBlob;
-          } catch (err) {
-            errorMsg = err instanceof Error ? err.message : 'Ошибка обработки PDF.';
-            pages = [];
+          if (isAndroid()) {
+            // Android: SAF content:// нельзя прочитать через fetch/asset —
+            // страницы и обложку считает нативный PdfRenderer (Kotlin).
+            const metadata = await getComicMetadataNative(pending.uri);
+            if (metadata.error) {
+              errorMsg = metadata.error;
+              pages = [];
+            } else {
+              pages = metadata.pages;
+              aspectRatios = metadata.aspectRatios;
+              if (metadata.coverBase64) {
+                coverBlob = base64ToBlob(metadata.coverBase64);
+              }
+            }
+          } else {
+            // Desktop: pdf.js — страницы + обложка из файла на диске.
+            try {
+              const res = await fetch(getFileSrc(pending.uri));
+              if (!res.ok) throw new Error('Не удалось прочитать PDF.');
+              const pdfBlob = await res.blob();
+              const pdfFile = new File([pdfBlob], pending.title, { type: 'application/pdf' });
+              const { parsePDF } = await import('./utils/pdf');
+              const parsed = await parsePDF(pdfFile, pending.title);
+              pages = Array.from({ length: parsed.totalPages }, (_, i) => String(i + 1));
+              coverBlob = parsed.coverBlob;
+              aspectRatios = parsed.aspectRatios;
+            } catch (err) {
+              errorMsg = err instanceof Error ? err.message : 'Ошибка обработки PDF.';
+              pages = [];
+            }
           }
         } else {
           // CBZ: Rust parses pages + cover natively (fast).
@@ -563,6 +708,39 @@ function App() {
         setImportProgress('Анализ комикса...');
 
         if (comic.format === 'pdf') {
+          if (isAndroid()) {
+            // Android: страницы/обложку считает нативный PdfRenderer
+            // (SAF content:// недоступен для fetch/pdf.js на этом стеке).
+            setImportProgress('Анализ PDF...');
+            const metadata = await getComicMetadataNative(comic.uri);
+            if (metadata.error) {
+              await saveComic(
+                comic.id, comic.title, comic.size, [], null,
+                comic.uri, 'pdf', comic.shelfId || null, metadata.error
+              );
+              const refreshed = await getAllComics();
+              setComics(refreshed);
+              throw new Error(metadata.error);
+            }
+            let pdfCover: Blob | null = null;
+            if (metadata.coverBase64) {
+              pdfCover = base64ToBlob(metadata.coverBase64);
+            }
+            comic = await saveComic(
+              comic.id, comic.title, comic.size, metadata.pages, pdfCover,
+              comic.uri, 'pdf', comic.shelfId || null,
+              undefined, metadata.aspectRatios
+            );
+            const list = await getAllComics();
+            setComics(list);
+
+            // Страницы ридер получает нативно (get_pdf_page), файл не нужен.
+            libraryScrollYRef.current = window.scrollY;
+            setActiveComicFile(null);
+            setActiveComicId(id);
+            return;
+          }
+
           // PDF is parsed entirely on the web layer via pdf.js (Rust doesn't
           // read PDFs). We fetch the file, extract the page count + cover.
           setImportProgress('Анализ PDF...');
@@ -577,7 +755,8 @@ function App() {
           const pages = Array.from({ length: parsed.totalPages }, (_, index) => String(index + 1));
           comic = await saveComic(
             comic.id, comic.title, comic.size, pages, parsed.coverBlob,
-            comic.uri, 'pdf', comic.shelfId || null
+            comic.uri, 'pdf', comic.shelfId || null,
+            undefined, parsed.aspectRatios
           );
           const list = await getAllComics();
           setComics(list);
@@ -617,10 +796,10 @@ function App() {
       }
 
       // CBZ in Tauri: pages are streamed from disk one-by-one via Rust, so we
-      // do NOT load the whole archive into RAM. PDF still needs the full file
-      // because pdf.js parses the document structure in-memory.
+      // do NOT load the whole archive into RAM. PDF on desktop still needs the
+      // full file (pdf.js); on Android pages come from the native renderer.
       let file: File | null = null;
-      if (comic.format === 'pdf') {
+      if (comic.format === 'pdf' && !isAndroid()) {
         const fileUrl = getFileSrc(comic.uri);
         const res = await fetch(fileUrl);
         if (!res.ok) throw new Error('Не удалось прочитать локальный файл.');
@@ -633,7 +812,9 @@ function App() {
       setActiveComicId(id);
     } catch (err) {
       console.error('Error loading comic file:', err);
-      await messageDialog(`Не удалось открыть комикс: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+      const errMsg = err instanceof Error ? err.message : 'Неизвестная ошибка';
+      invoke('log_js', { msg: `openComic failed: ${errMsg} | stack: ${err instanceof Error ? (err.stack ?? '') : ''}` }).catch(() => {});
+      await messageDialog(`Не удалось открыть комикс: ${errMsg}`);
     } finally {
       setIsImporting(false);
       setImportProgress('');
@@ -879,6 +1060,7 @@ function App() {
           onSyncLibrary={() => syncLibrary(libraryFolderUri)}
           isSelectMode={isSelectMode}
           setIsSelectMode={setIsSelectMode}
+          onLoadCover={handleLoadCover}
           initialScrollTop={libraryScrollYRef.current}
         />
       )}
