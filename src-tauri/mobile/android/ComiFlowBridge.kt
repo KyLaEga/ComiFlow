@@ -93,6 +93,12 @@ class PageArgs {
 }
 
 @InvokeArg
+class CoverArgs {
+    var uri: String? = null
+    var format: String? = null
+}
+
+@InvokeArg
 class VolumeKeyModeArgs {
     var mode: String? = null // "off" | "single" | "auto"
 }
@@ -113,6 +119,56 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
     private val importDestNames = HashMap<String, String>()
     private val importFolderUris = HashMap<String, String>()
 
+    // ── Читательский кэш (одна открытая книга) ────────────────────────────
+    // Удерживает открытый дескриптор активного комикса (ZipFile для CBZ или
+    // PdfRenderer для PDF), чтобы перелистывание не переоткрывало файл на
+    // каждой странице (на средних устройствах открытие CBZ с тысячами записей
+    // занимает сотни миллисекунд — это и был «тормоз» листания). Закрывается
+    // при смене файла и по команде releaseReaderFile (вызывается при закрытии
+    // читалки).
+    private var readerCacheKey: String? = null
+    private var readerZip: ZipFile? = null
+    private var readerPfd: ParcelFileDescriptor? = null
+    private var readerPdf: PdfRenderer? = null
+
+    private fun closeReaderCache() {
+        // Порядок важен: PdfRenderer владеет своим дескриптором, PFD закрываем
+        // последним (ZipFile работает через /proc/self/fd и свой FD не держит).
+        runCatching { readerPdf?.close() }
+        runCatching { readerZip?.close() }
+        runCatching { readerPfd?.close() }
+        readerZip = null
+        readerPfd = null
+        readerPdf = null
+        readerCacheKey = null
+    }
+
+    /** Открытый ZipFile для CBZ (кэшируется по URI книги). */
+    private fun openReaderZip(uri: Uri): ZipFile? {
+        val key = uri.toString()
+        if (key == readerCacheKey && readerZip != null) return readerZip
+        closeReaderCache()
+        val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return null
+        val zf = ZipFile(File("/proc/self/fd/${pfd.fd}"))
+        readerCacheKey = key
+        readerPfd = pfd
+        readerZip = zf
+        return zf
+    }
+
+    /** Открытый PdfRenderer для PDF (кэшируется по URI книги). */
+    private fun openReaderPdf(uri: Uri): PdfRenderer? {
+        val key = uri.toString()
+        if (key == readerCacheKey && readerPdf != null) return readerPdf
+        closeReaderCache()
+        val pfd = activity.contentResolver.openFileDescriptor(uri, "r") ?: return null
+        val renderer = PdfRenderer(pfd)
+        readerCacheKey = key
+        readerPfd = pfd
+        readerPdf = renderer
+        return renderer
+    }
+
     // ════════════════════════════════════════════════════════════════════
     // Folder selection (ACTION_OPEN_DOCUMENT_TREE)
     // ════════════════════════════════════════════════════════════════════
@@ -129,6 +185,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             }
             // Remember the invoke so the activity callback can resolve it.
             pendingFolderInvoke = invoke
+            Logger.info("[ComiFlow] selectLibraryFolder: starting picker")
             startActivityForResult(invoke, intent, "onFolderPicked")
         } catch (ex: Exception) {
             val msg = ex.message ?: "Failed to open folder picker"
@@ -140,14 +197,17 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
     @ActivityCallback
     fun onFolderPicked(invoke: Invoke, result: ActivityResult) {
         try {
+            Logger.info("[ComiFlow] onFolderPicked: resultCode=" + result.resultCode)
             if (result.resultCode != Activity.RESULT_OK) {
                 invoke.reject("cancelled")
                 return
             }
             val treeUri: Uri = result.data?.data ?: run {
+                Logger.error("[ComiFlow] onFolderPicked: no uri in data")
                 invoke.reject("no uri")
                 return
             }
+            Logger.info("[ComiFlow] onFolderPicked: uri=" + treeUri)
 
             // Persist the URI permission so we keep access across app restarts.
             val takeFlags = (result.data?.flags ?: 0) and
@@ -321,7 +381,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                     renderer.openPage(0).use { page ->
                         var width = page.width
                         var height = page.height
-                        val maxDim = 640
+                        val maxDim = 480
                         if (width > height) {
                             if (width > maxDim) {
                                 height = (height.toDouble() * maxDim / width).toInt()
@@ -344,6 +404,21 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
                 result.put("format", "pdf")
                 result.put("totalPages", pageCount)
                 result.put("coverBase64", coverBase64)
+
+                // Страницы ["1".."N"] + пропорции (w/h) — webtoon-лента
+                // резервирует реальную высоту и не «прыгает» при загрузке.
+                val pagesArray = JSONArray()
+                val ratiosArray = JSONArray()
+                for (i in 0 until pageCount) {
+                    pagesArray.put((i + 1).toString())
+                    runCatching {
+                        renderer.openPage(i).use { pg ->
+                            ratiosArray.put(pg.width.toFloat() / pg.height.toFloat())
+                        }
+                    }.getOrElse { ratiosArray.put(JSONObject.NULL) }
+                }
+                result.put("pages", pagesArray)
+                result.put("aspectRatios", ratiosArray)
             }
         }
     }
@@ -480,7 +555,7 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
             var width = opts.outWidth
             var height = opts.outHeight
-            val maxDim = 640
+            val maxDim = 480
             var sample = 1
             if (width > maxDim || height > maxDim) {
                 val halfH = height / 2
@@ -622,7 +697,15 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             val args = invoke.parseArgs(PageArgs::class.java)
             val uri = Uri.parse(args.uri ?: "")
             val pageName = args.pageName ?: ""
-            val base64 = readZipEntryBase64(uri, pageName)
+            val base64 = if (readerCacheKey == uri.toString() && readerZip != null) {
+                // Кэшированный ZipFile — без переоткрытия архива.
+                val entry = readerZip!!.getEntry(pageName)
+                if (entry != null) {
+                    readerZip!!.getInputStream(entry).use { encodeDataUrl(pageName, readAll(it)) }
+                } else null
+            } else {
+                readZipEntryBase64(uri, pageName)
+            }
             if (base64 != null) {
                 val ret = JSObject()
                 ret.put("data", base64)
@@ -633,6 +716,135 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
         } catch (ex: Exception) {
             invoke.reject("getCbzPage failed: ${ex.message}")
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Single PDF page render (for the reader)
+    // ════════════════════════════════════════════════════════════════════
+
+    @Command
+    fun getPdfPage(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(PageArgs::class.java)
+            val uri = Uri.parse(args.uri ?: "")
+            val pageIndex = (args.pageName ?: "1").toIntOrNull()?.minus(1) ?: 0
+            val data = if (readerCacheKey == uri.toString() && readerPdf != null) {
+                // Кэшированный PdfRenderer — без переоткрытия документа.
+                renderPdfPage(readerPdf!!, pageIndex, 2.0f)
+            } else {
+                // Холодный путь: свой дескриптор + рендер, затем кэшируем.
+                val renderer = openReaderPdf(uri)
+                if (renderer != null) renderPdfPage(renderer, pageIndex, 2.0f) else null
+            }
+            if (data != null) {
+                val ret = JSObject()
+                ret.put("data", data)
+                invoke.resolve(ret)
+            } else {
+                invoke.reject("Страница не найдена: ${args.pageName}")
+            }
+        } catch (ex: Exception) {
+            invoke.reject("getPdfPage failed: ${ex.message}")
+        }
+    }
+
+    /** Рендер одной страницы PDF в data-URL (JPEG, качество 85). */
+    private fun renderPdfPage(renderer: PdfRenderer, pageIndex: Int, scale: Float): String? {
+        if (pageIndex < 0 || pageIndex >= renderer.pageCount) return null
+        return renderer.openPage(pageIndex).use { page ->
+            val w = (page.width * scale).toInt()
+            val h = (page.height * scale).toInt()
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(android.graphics.Color.WHITE)
+            val matrix = android.graphics.Matrix()
+            matrix.setScale(scale, scale)
+            page.render(bmp, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            val baos = ByteArrayOutputStream()
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            bmp.recycle()
+            "data:image/jpeg;base64,$base64"
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Cover-only fetch + release (для библиотеки и жизни кэша)
+    // ════════════════════════════════════════════════════════════════════
+
+    /**
+     * Быстрая обложка «на лету» (без полного разбора метаданных): карточка
+     * в окне просмотра библиотеки получает обложку сразу, а не ждёт, пока
+     * фоновая очередь дойдёт до неё по порядку. Обложка сжимается до 480px —
+     * маленькая data-URL быстро декодируется на средних устройствах.
+     */
+    @Command
+    fun getCover(invoke: Invoke) {
+        try {
+            val args = invoke.parseArgs(CoverArgs::class.java)
+            val uri = Uri.parse(args.uri ?: "")
+            val format = args.format ?: "cbz"
+            val data = if (format == "pdf") {
+                val renderer = openReaderPdf(uri)
+                if (renderer != null && renderer.pageCount > 0) {
+                    val scale = renderer.openPage(0).use { p -> 480.0f / maxOf(p.width, p.height) }
+                    renderPdfPage(renderer, 0, scale)
+                } else null
+            } else {
+                val zf = openReaderZip(uri)
+                if (zf != null) readCbzCover(zf) else null
+            }
+            if (data != null) {
+                val ret = JSObject()
+                ret.put("data", data)
+                invoke.resolve(ret)
+            } else {
+                invoke.reject("cover not found")
+            }
+        } catch (ex: Exception) {
+            invoke.reject("getCover failed: ${ex.message}")
+        }
+    }
+
+    /** Первая (natural-sort) картинка из открытого CBZ, сжатая до 480px. */
+    private fun readCbzCover(zf: ZipFile): String? {
+        var first: ZipEntry? = null
+        val entries = zf.entries()
+        while (entries.hasMoreElements()) {
+            val ze = entries.nextElement() as ZipEntry
+            if (!ze.isDirectory && isImageFile(ze.getName() ?: "")) {
+                if (first == null || naturalCompare(ze.getName(), first.getName()) < 0) first = ze
+            }
+        }
+        val entry = first ?: return null
+        val bytes = zf.getInputStream(entry).use { readAll(it) }
+        return encodeScaledJpeg(bytes, 480)
+    }
+
+    /** Декодирует картинку, уменьшает до maxDim и возвращает JPEG data-URL. */
+    private fun encodeScaledJpeg(bytes: ByteArray, maxDim: Int): String {
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: return encodeDataUrl("cover.jpg", bytes)
+        val w = bmp.width
+        val h = bmp.height
+        var nw = w
+        var nh = h
+        if (w > h && w > maxDim) { nh = h * maxDim / w; nw = maxDim }
+        else if (h > maxDim) { nw = w * maxDim / h; nh = maxDim }
+        val scaled = if (nw != w || nh != h) {
+            Bitmap.createScaledBitmap(bmp, nw, nh, true).also { bmp.recycle() }
+        } else bmp
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, 80, baos)
+        if (scaled !== bmp) scaled.recycle()
+        val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+        return "data:image/jpeg;base64,$b64"
+    }
+
+    /** Закрывает кэш читалки (вызывается при закрытии ридера). */
+    @Command
+    fun releaseReaderFile(invoke: Invoke) {
+        closeReaderCache()
+        invoke.resolve(JSObject().apply { put("ok", true) })
     }
 
     /**

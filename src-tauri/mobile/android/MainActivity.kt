@@ -13,6 +13,7 @@
 package com.kylaega.comiflow
 
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
@@ -51,6 +52,10 @@ class MainActivity : TauriActivity() {
 
     override fun onWebViewCreate(webView: WebView) {
         this.webView = webView
+        // Приложение полностью локальное (нет HTTP-контента) — HTTP-кэш
+        // WebView бесполезен, но копит десятки МБ (старый Capacitor-SW
+        // оставил после себя ~60 МБ). Чистим при каждом старте.
+        webView.clearCache(true)
         super.onWebViewCreate(webView)
     }
 
@@ -87,6 +92,12 @@ class MainActivity : TauriActivity() {
         if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN) {
             val prefs = getSharedPreferences("ComiFlowPrefs", MODE_PRIVATE)
             val mode = prefs.getString("volumeKeyMode", "off") ?: "off"
+            // Диагностика: режим + событие пишутся в logcat, чтобы по жалобе
+            // «листает, хотя выключено» было видно, что реально читает MainActivity.
+            Log.i(
+                "ComiFlowVol",
+                "volume key ${event.action} mode=$mode repeat=${event.repeatCount}"
+            )
             if (mode != "off") {
                 val key = if (code == KeyEvent.KEYCODE_VOLUME_UP) "volume_up" else "volume_down"
                 val repeat = if (event.action == KeyEvent.ACTION_DOWN) event.repeatCount else -1

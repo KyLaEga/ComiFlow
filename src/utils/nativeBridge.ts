@@ -100,6 +100,48 @@ export async function getCbzPage(filePath: string, pageName: string): Promise<st
 // ── File operations ───────────────────────────────────────────────────────
 
 /**
+ * Рендер одной страницы PDF нативным рендерером (Android; на desktop
+ * страницы PDF рисует pdf.js на веб-слое). Возвращает data-URL или null.
+ */
+export async function getPdfPageNative(filePath: string, pageName: string): Promise<string | null> {
+  if (!isTauri() || !isAndroid()) return null;
+  try {
+    return await invoke<string | null>('get_pdf_page', { filePath, pageName });
+  } catch (e) {
+    console.error('Tauri getPdfPage error:', e);
+    return null;
+  }
+}
+
+/**
+ * Быстрая обложка комикса (Android): data-URL сжатой до ~480px картинки —
+ * библиотека подгружает обложку карточки сразу при попадании в окно
+ * просмотра, не дожидаясь фоновой очереди метаданных. Desktop: null.
+ */
+export async function fetchCoverNative(filePath: string, format: string): Promise<string | null> {
+  if (!isTauri() || !isAndroid()) return null;
+  try {
+    return await invoke<string | null>('get_cover', { filePath, format });
+  } catch (e) {
+    console.error('Tauri getCover error:', e);
+    return null;
+  }
+}
+
+/**
+ * Закрывает нативный кэш открытой книги (дескриптор файла) — вызывается
+ * при закрытии ридера. Desktop: no-op.
+ */
+export async function releaseReaderFile(filePath: string): Promise<void> {
+  if (!isTauri() || !isAndroid()) return;
+  try {
+    await invoke('release_reader_file', { filePath });
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * Delete a single file by its absolute path.
  * @param mode 'trash' = move to recycle bin (recoverable),
  *             'permanent' = delete forever (not recoverable)

@@ -327,14 +327,18 @@ fn list_library_files(
 ) -> String {
     #[cfg(target_os = "android")]
     {
+        eprintln!("[ComiFlow] list_library_files folder_path={:?}", folder_path);
         if let Some(bridge) = android_bridge(&app) {
             let payload = serde_json::json!({ "folderUri": folder_path });
             let resp: Option<AndroidFilesResp> = bridge.call("listLibraryFiles", payload);
             if let Some(resp) = resp {
+                eprintln!("[ComiFlow] list_library_files -> {} bytes", resp.files.len());
                 return resp.files;
             }
+            eprintln!("[ComiFlow] list_library_files -> bridge returned None");
             return "[]".to_string();
         }
+        eprintln!("[ComiFlow] list_library_files -> no bridge");
         return "[]".to_string();
     }
 
@@ -357,13 +361,16 @@ fn get_comic_metadata(
 ) -> String {
     #[cfg(target_os = "android")]
     {
+        eprintln!("[ComiFlow] get_comic_metadata uri={:?}", file_path);
         if let Some(bridge) = android_bridge(&app) {
             let payload = serde_json::json!({ "uri": file_path });
             let resp: Option<AndroidMetadataResp> = bridge.call("getComicMetadataNative", payload);
             if let Some(resp) = resp {
+                eprintln!("[ComiFlow] get_comic_metadata -> {} bytes", resp.metadata.len());
                 return resp.metadata;
             }
         }
+        eprintln!("[ComiFlow] get_comic_metadata -> bridge unavailable");
         metadata_error_json("Android bridge unavailable")
     }
 
@@ -482,6 +489,36 @@ fn get_cbz_page(
     }
 }
 
+/// Рендер одной страницы PDF (Android: Kotlin PdfRenderer → data-URL;
+/// desktop: pdf.js на веб-слое, эта команда не используется).
+/// Проброс JS-ошибок в logcat (console в release-WebView недоступен,
+/// а без логов дефекты вроде «PDF не открывается» не диагностируются).
+#[tauri::command]
+fn log_js(msg: String) {
+    eprintln!("[ComiFlow:js] {}", msg);
+}
+
+#[tauri::command]
+fn get_pdf_page(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+    page_name: String,
+) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = android_bridge(&app)?;
+        let payload = serde_json::json!({ "uri": file_path, "pageName": page_name });
+        let resp: Option<AndroidPageResp> = bridge.call("getPdfPage", payload);
+        resp.and_then(|r| r.data)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (file_path, page_name);
+        None
+    }
+}
+
 #[tauri::command]
 fn delete_file(
     #[allow(unused_variables)] app: tauri::AppHandle,
@@ -528,6 +565,55 @@ fn move_to_trash(file_path: &str) -> bool {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 fn move_to_trash(_file_path: &str) -> bool {
     false
+}
+
+/// Быстрая обложка комикса «на лету» (Android): Kotlin открывает файл через
+/// кэш читалки, берёт первую картинку (CBZ) / первую страницу (PDF) и
+/// возвращает сжатую до 480px data-URL. Нужна библиотеке: карточка в окне
+/// просмотра получает обложку сразу, не дожидаясь фоновой очереди.
+#[tauri::command]
+fn get_cover(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+    format: String,
+) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        let bridge = android_bridge(&app)?;
+        let payload = serde_json::json!({ "uri": file_path, "format": format });
+        let resp: Option<AndroidPageResp> = bridge.call("getCover", payload);
+        resp.and_then(|r| r.data)
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (file_path, format);
+        None
+    }
+}
+
+/// Закрывает кэш читалки (открытый дескриптор книги) — вызывается при
+/// закрытии ридера, чтобы не держать файл открытым.
+#[tauri::command]
+fn release_reader_file(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    file_path: String,
+) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let payload = serde_json::json!({ "uri": file_path });
+            let resp: Option<AndroidOkResp> = bridge.call("releaseReaderFile", payload);
+            return resp.map(|r| r.ok).unwrap_or(false);
+        }
+        return false;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = file_path;
+        true
+    }
 }
 
 /// Native yes/no confirmation dialog (replaces window.confirm, which is
@@ -730,7 +816,9 @@ async fn select_library_folder(app: tauri::AppHandle) -> Option<String> {
             let bridge = android_bridge(&app2)?;
             let payload = serde_json::json!({});
             let resp: Option<AndroidFolderResp> = bridge.call("selectLibraryFolder", payload);
-            resp.and_then(|r| r.uri)
+            let uri = resp.and_then(|r| r.uri);
+            eprintln!("[ComiFlow] select_library_folder -> {:?}", uri);
+            uri
         })
         .await
         .ok()
@@ -844,6 +932,10 @@ pub fn run() {
             list_library_files,
             get_comic_metadata,
             get_cbz_page,
+            get_pdf_page,
+            get_cover,
+            release_reader_file,
+            log_js,
             delete_file,
             clear_import_cache,
             set_volume_key_mode,
