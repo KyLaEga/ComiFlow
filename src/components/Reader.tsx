@@ -73,13 +73,6 @@ interface DrawerComicCardProps {
   onClick: () => void;
 }
 
-/** Интервал автопропрутки (мс между страницами) для режима "auto". */
-const VOLUME_AUTO_SPEED_MS: Record<ReaderSettings['volumeKeySpeed'], number> = {
-  slow: 700,
-  normal: 350,
-  fast: 150,
-};
-
 const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick }) => {
   const progressPercent = c.totalPages > 0 
     ? Math.round((c.currentPage / (c.totalPages - 1 || 1)) * 100) 
@@ -565,6 +558,20 @@ export const Reader: React.FC<ReaderProps> = ({
   const autoPlayPausedRef = useRef(false);
   const autoPlayStoppedRef = useRef(false);
   const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Рефы для «в конце книги открыть следующую»: замыкание тика должно видеть
+  // СВЕЖИЕ значения (настройка может поменяться, список полки — тоже).
+  const autoOpenNextRef = useRef(settings.autoOpenNext);
+  const nextComicRef = useRef(nextComic);
+  const onSelectComicRef = useRef(onSelectComic);
+  useEffect(() => {
+    autoOpenNextRef.current = settings.autoOpenNext;
+  }, [settings.autoOpenNext]);
+  useEffect(() => {
+    nextComicRef.current = nextComic;
+  }, [nextComic]);
+  useEffect(() => {
+    onSelectComicRef.current = onSelectComic;
+  }, [onSelectComic]);
 
   // Цепочка setTimeout (не setInterval): каждый тик перепланируется и берёт
   // СВЕЖУЮ страницу через currentPageRef — замыкание никогда не устаревает.
@@ -573,11 +580,17 @@ export const Reader: React.FC<ReaderProps> = ({
     autoPlayTimerRef.current = setTimeout(() => {
       autoPlayTimerRef.current = null;
       if (autoPlayStoppedRef.current || autoPlayPausedRef.current) return;
-      // Конец книги — автопропрутка завершена.
-      if (currentPageRef.current >= comic.totalPages - 1) return;
+      // Конец книги: либо автопропрутка завершена, либо (если включено в
+      // настройках) автоматически открываем следующую книгу с полки.
+      if (currentPageRef.current >= comic.totalPages - 1) {
+        if (autoOpenNextRef.current && nextComicRef.current) {
+          onSelectComicRef.current(nextComicRef.current.id);
+        }
+        return;
+      }
       goToPage(currentPageRef.current + 1);
       scheduleAutoPlayTick();
-    }, VOLUME_AUTO_SPEED_MS[settings.volumeKeySpeed]);
+    }, settings.volumeKeySpeed * 1000);
     // settings.mode в deps: при смене режима цепочка пересоздаётся со свежим
     // goToPage (иначе замыкание листало бы по старому режиму).
   }, [comic.totalPages, settings.volumeKeySpeed, settings.mode]);

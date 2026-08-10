@@ -105,7 +105,8 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   splitDoublePages: true,
   zoomLock: false,
   volumeKeysEnabled: 'off',
-  volumeKeySpeed: 'normal',
+  volumeKeySpeed: 2,
+  autoOpenNext: false,
   brightness: 100,
   contrast: 100,
   deleteMode: 'off',
@@ -411,8 +412,17 @@ function App() {
           if (parsed.volumeKeysEnabled !== undefined && typeof parsed.volumeKeysEnabled !== 'string') {
             parsed.volumeKeysEnabled = parsed.volumeKeysEnabled === true ? 'single' : 'off';
           }
+          // Migrate legacy volumeKeySpeed: 'slow'|'normal'|'fast' → секунды
+          // на страницу (старые мс: slow=700, normal=350, fast=150). Ближайшие
+          // пресеты: 2с / 1с / 0.5с — читабельный темп, скорость можно менять.
+          if (parsed.volumeKeySpeed !== undefined && typeof parsed.volumeKeySpeed === 'string') {
+            parsed.volumeKeySpeed = parsed.volumeKeySpeed === 'slow' ? 2 : parsed.volumeKeySpeed === 'fast' ? 0.5 : 1;
+          }
           if (parsed.volumeKeySpeed === undefined) {
-            parsed.volumeKeySpeed = 'normal';
+            parsed.volumeKeySpeed = DEFAULT_SETTINGS.volumeKeySpeed;
+          }
+          if (parsed.autoOpenNext === undefined) {
+            parsed.autoOpenNext = false;
           }
           setSettings({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme });
           if (parsed.volumeKeysEnabled !== undefined) {
