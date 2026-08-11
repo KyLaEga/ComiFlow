@@ -1,5 +1,6 @@
 @import './universal-typography.css';
 @import './universal-themes.css';
+@import './universal-tokens.css';
 @import './universal-components.css';
 
 :root {
@@ -7,73 +8,18 @@
   --font-heading: var(--font-ui);
   --font-body: var(--font-ui);
 
-  /* Theme Defaults (Light Theme) */
-  --bg-primary: #f8f9fa;
-  --bg-secondary: #ffffff;
-  --bg-tertiary: #f1f3f5;
-  --text-primary: #1a1b1e;
-  --text-secondary: #5c5f66;
-  --text-muted: #868e96;
+  /* Map ComiFlow-specific variables to Universal UI variables */
+  --accent-light: var(--accent-glow);
+  --accent-border: var(--accent-glow);
+  --card-shadow: 0 4px 16px var(--shadow), 0 1px 3px rgba(0, 0, 0, 0.05);
   
-  --accent: #aa3bff;
-  --accent-hover: #9222e8;
-  --accent-light: rgba(170, 59, 255, 0.08);
-  --accent-border: rgba(170, 59, 255, 0.3);
-  
-  --border-color: #e9ecef;
-  --card-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.02);
-  --hud-bg: rgba(255, 255, 255, 0.85);
-  --hud-border: rgba(0, 0, 0, 0.06);
-  --hud-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.15);
-  
-  --danger: #fa5252;
-  --danger-hover: #e03131;
+  --hud-bg: var(--glass-bg);
+  --hud-border: var(--glass-border);
+  --hud-shadow: 0 20px 40px -15px var(--shadow);
 
   --transition-fast: 0.15s ease;
   --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Dark Theme Variables */
-[data-theme='dark'] {
-  --bg-primary: #121316;
-  --bg-secondary: #1a1b1f;
-  --bg-tertiary: #25262c;
-  --text-primary: #f8f9fa;
-  --text-secondary: #adb5bd;
-  --text-muted: #495057;
-  
-  --accent: #c084fc;
-  --accent-hover: #d8b4fe;
-  --accent-light: rgba(192, 132, 252, 0.15);
-  --accent-border: rgba(192, 132, 252, 0.4);
-  
-  --border-color: #2c2e35;
-  --card-shadow: 0 12px 36px -12px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.2);
-  --hud-bg: rgba(20, 21, 26, 0.85);
-  --hud-border: rgba(255, 255, 255, 0.06);
-  --hud-shadow: 0 24px 48px -18px rgba(0, 0, 0, 0.6);
-}
-
-/* OLED Black Theme Variables */
-[data-theme='oled'] {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0c;
-  --bg-tertiary: #141416;
-  --text-primary: #ffffff;
-  --text-secondary: #9e9ea7;
-  --text-muted: #3a3a3e;
-  
-  --accent: #c084fc;
-  --accent-hover: #d8b4fe;
-  --accent-light: rgba(192, 132, 252, 0.15);
-  --accent-border: rgba(192, 132, 252, 0.4);
-  
-  --border-color: #1a1a1f;
-  --card-shadow: 0 0 0 1px var(--border-color);
-  --hud-bg: rgba(0, 0, 0, 0.9);
-  --hud-border: rgba(255, 255, 255, 0.08);
-  --hud-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 /* CSS Resets & General Styles */
@@ -149,7 +95,7 @@ button {
   font-family: var(--font-heading);
   font-size: 24px;
   font-weight: 800;
-  background: linear-gradient(135deg, var(--accent) 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: -0.5px;
@@ -182,7 +128,7 @@ button {
 .btn-primary:hover {
   background-color: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(170, 59, 255, 0.25);
+  box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 .btn-primary:active {
@@ -241,9 +187,13 @@ button {
   max-width: 450px;
 }
 
-.search-input {
+.search-input,
+input.search-input {
   width: 100%;
-  padding: 12px 16px 12px 46px;
+  /* !important: universal-components.css defines input[type=text] padding
+     with higher specificity, which collapses the left padding and makes the
+     search icon overlap the typed text. */
+  padding: 12px 16px 12px 46px !important;
   border-radius: 14px;
   border: 1px solid var(--border-color);
   background-color: var(--bg-secondary);
@@ -252,7 +202,8 @@ button {
   transition: all var(--transition-normal);
 }
 
-.search-input:focus {
+.search-input:focus,
+input.search-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-light);
 }
@@ -513,6 +464,30 @@ button {
   text-align: center;
 }
 
+/* App Splash (shown before React mounts and during initial DB load) */
+.app-splash {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg-primary);
+}
+
+/* Hide the native page scrollbar on the main window: the library uses a
+   thumb-friendly floating scroll FAB instead, so the thin bar at the right
+   edge is redundant and confusing. Panels/drawers keep their scrollbars. */
+html, body {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 .spinner {
   width: 50px;
   height: 50px;
@@ -558,7 +533,9 @@ button {
   overflow-y: auto;
   overflow-x: hidden;
   display: block;
-  scroll-behavior: smooth;
+  /* 'auto', а не 'smooth': программные прыжки (ползунок, кнопки, автопропрутка)
+     выполняются мгновенно, без «пролистывания» через все страницы ленты. */
+  scroll-behavior: auto;
   height: 100%;
 }
 
@@ -586,6 +563,9 @@ button {
   align-items: center;
   justify-content: center;
   position: relative;
+  /* Свайпы листания обрабатываются вручную — не даём браузеру канселить
+     pointer-события (скролл/зум) на Android. */
+  touch-action: none;
 }
 
 .page-image-wrapper {
@@ -634,6 +614,9 @@ button {
   width: 25%;
   z-index: 102;
   cursor: pointer;
+  /* Свайпы листания начинаются и на hotspot'ах — запрещаем браузерный
+     скролл/зум (Android WebView смотрит touch-action и на таргете). */
+  touch-action: none;
 }
 
 .nav-hotspot-left {
@@ -717,6 +700,31 @@ button {
   align-items: center;
   gap: 16px;
 }
+
+.autoplay-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: 0 2px 10px var(--shadow);
+}
+
+.autoplay-pill.paused {
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
 
 .page-slider {
   flex: 1;
@@ -920,6 +928,311 @@ input:checked + .switch-slider:before {
   outline: none;
 }
 
+/* Settings Tabs */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  background-color: var(--bg-tertiary);
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.settings-tab {
+  flex: 1;
+  padding: 8px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  text-align: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.settings-tab.active {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+/* Preset chip grid (brightness / contrast / autoplay speed) */
+.preset-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.preset-chip-grid.speed-grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.preset-chip {
+  padding: 8px 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--text-secondary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.preset-chip.active {
+  background-color: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+/* Theme picker (канон Universal UI theme-status, как в ежедневнике) */
+.theme-status {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl, 12px);
+  padding: var(--sp-6, 12px) var(--sp-6, 12px) var(--sp-5, 10px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5, 10px);
+  box-sizing: border-box;
+}
+
+.theme-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-6, 12px);
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: var(--sp-5, 10px);
+}
+
+.theme-status-title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+}
+
+.theme-status-subtitle {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.theme-status-subtitle strong {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* Кнопки режима: ☀️ Светлая / 🌙 Тёмная / 🖥️ Системная */
+.theme-status-modes {
+  display: flex;
+  gap: var(--sp-1, 2px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg, 8px);
+  padding: 2px;
+}
+
+.theme-status-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.theme-status-mode-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.theme-status-mode-btn.active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  font-weight: 700;
+}
+
+/* Карточки предпочитаемых тем */
+.theme-status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4, 8px);
+}
+@media (max-width: 480px) {
+  .theme-status-grid { grid-template-columns: 1fr; }
+}
+
+.theme-status-pref {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg, 8px);
+  padding: var(--sp-4, 8px) var(--sp-5, 10px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4, 8px);
+  box-sizing: border-box;
+}
+.theme-status-pref-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.theme-status-pref-value {
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+/* Бейджи состояния: ✓ Активна / Сохранена */
+.theme-status-tag {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: var(--radius-full, 9999px);
+  white-space: nowrap;
+}
+.theme-status-tag.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+.theme-status-tag.saved {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+
+/* OLED-переключатель */
+.theme-status-oled {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-6, 12px);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl, 12px);
+  padding: var(--sp-5, 10px) var(--sp-6, 12px);
+}
+.theme-status-oled-title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.theme-status-oled-desc {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Семейство темы: акцентная точка + свотчи (светлая/тёмная; OLED — галочкой) */
+.theme-family {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4, 8px);
+}
+.theme-family-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 6px);
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.theme-family-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full, 9999px);
+  flex-shrink: 0;
+}
+.theme-swatches {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-4, 8px);
+}
+
+/* Свотч темы: 3 цветных чипса (фон/акцент/текст) + название + галочка */
+.theme-swatch {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: var(--sp-4, 8px);
+  border-radius: var(--radius-lg, 8px);
+  border: 2px solid var(--border-color);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.theme-swatch:hover {
+  border-color: var(--text-muted);
+}
+.theme-swatch:active {
+  transform: scale(0.98);
+}
+.theme-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.theme-swatch-colors {
+  display: flex;
+  gap: 3px;
+}
+.theme-swatch-colors span {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+.theme-swatch-name {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+/* Галочка выбранной темы на свотче (видна на любом фоне — кружок акцентом) */
+.theme-swatch-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.theme-swatch.active .theme-swatch-check { display: flex; }
+
 /* Toast Message */
 .toast-msg {
   position: fixed;
@@ -1007,7 +1320,7 @@ input:checked + .switch-slider:before {
   background-color: var(--accent);
   border-color: var(--accent);
   color: #ffffff;
-  box-shadow: 0 4px 10px rgba(170, 59, 255, 0.2);
+  box-shadow: 0 4px 10px var(--accent-glow);
 }
 
 .shelf-tab-btn-add {
@@ -1140,8 +1453,18 @@ input:checked + .switch-slider:before {
   display: flex;
   gap: 16px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 8px 4px 16px 4px;
   scrollbar-width: thin;
+  /* Enable finger / trackpad horizontal panning with inertia. */
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+
+.drawer-comic-card {
+  scroll-snap-align: start;
 }
 
 .drawer-comic-card {
@@ -1270,5 +1593,23 @@ input:checked + .switch-slider:before {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+/* Fast Scroll Track and Handle styling */
+.fast-scroll-track {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.fast-scroll-track.visible {
+  opacity: 0.7;
+  pointer-events: auto;
+}
+
+.fast-scroll-handle:hover,
+.fast-scroll-handle:active {
+  background-color: var(--accent) !important;
+  transform: translateY(-50%) scaleX(1.3) !important;
 }
 

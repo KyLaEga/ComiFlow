@@ -8,15 +8,12 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "android:sync": "npm run build && npx cap sync",
-    "android:open": "npx cap open android"
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
-    "@capacitor/android": "^8.4.1",
-    "@capacitor/app": "^8.1.0",
-    "@capacitor/cli": "^8.4.1",
-    "@capacitor/core": "^8.4.1",
-    "jszip": "^3.10.1",
+    "@tauri-apps/api": "^2.11.1",
     "localforage": "^1.10.0",
     "lucide-react": "^1.22.0",
     "pdfjs-dist": "^6.1.200",
@@ -25,7 +22,7 @@
     "react-virtuoso": "^4.18.10"
   },
   "devDependencies": {
-    "@types/jszip": "^3.4.0",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

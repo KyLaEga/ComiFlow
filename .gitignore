@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ZCode agent local data (session plans, memory) — must never be committed
+.zcode/
+
+# Tauri generated assets
+src-tauri/gen/schemas/

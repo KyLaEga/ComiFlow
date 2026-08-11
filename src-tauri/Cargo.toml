@@ -1,0 +1,41 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "ComiFlow — comic & manga reader"
+authors = ["KyLaEga"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = ["protocol-asset"] }
+tauri-plugin-log = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+# Comic archive parsing
+zip = "2.4"
+base64 = "0.22"
+# Shared workspace utilities (MIME detection, natural-order sort)
+core_base = { path = "../../Rust_Workspace/core_base", default-features = false, features = ["mime"] }
+# Async oneshot channel for the non-blocking folder picker
+tokio = { version = "1", features = ["sync"] }
+
+# Move-to-trash (recycle bin) for safe file deletion.
+# Only enabled on desktop platforms — `trash` has no Android/iOS backend
+# (there is no system Trash API on Android), and without this gate the crate
+# fails to compile for `aarch64-linux-android`.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+trash = "5"

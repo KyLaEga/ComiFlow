@@ -1,15 +1,20 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { updateComicProgress } from '../utils/db';
 import type { ComicMetadata } from '../utils/db';
-import { getPageBlob, clearCBZCache } from '../utils/cbz';
-import { getPdfPageBlob, clearPDFCache } from '../utils/pdf';
+import { getPageBlob } from '../utils/cbz';
+import { getPdfPageBlob, clearPDFCache, clearPdfPageCache } from '../utils/pdf';
+import { isAndroid, getPdfPageNative } from '../utils/nativeBridge';
+import { base64ToBlob } from '../utils/pageUtils';
+import { setReaderActive, releaseReaderFile } from '../utils/nativeBridge';
 import type { ReaderSettings } from './Settings';
-import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X } from 'lucide-react';
+import { ArrowLeft, Settings as SettingsIcon, ChevronLeft, ChevronRight, LayoutGrid, X, Pause, Play } from 'lucide-react';
 
 
 interface ReaderProps {
   comic: ComicMetadata;
-  fileBlob: Blob;
+  /** Required for PDF (pdf.js needs the document bytes). Unused for CBZ in
+   *  Tauri, where pages are streamed from disk one at a time. */
+  fileBlob: Blob | null;
   settings: ReaderSettings;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -19,15 +24,22 @@ interface ReaderProps {
 
 interface DynamicCoverImageProps {
   coverBlob: Blob | null;
+  /** Preferred source: a persisted data-URL string (survives IndexedDB). */
+  coverDataUrl?: string | null;
   title: string;
   className?: string;
   fallbackClassName?: string;
 }
 
-const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, title, className, fallbackClassName }) => {
+const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, coverDataUrl, title, className, fallbackClassName }) => {
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    // Prefer the reliable data-URL; fall back to a transient object URL.
+    if (coverDataUrl) {
+      setCoverUrl(coverDataUrl);
+      return;
+    }
     if (coverBlob) {
       let url = '';
       try {
@@ -39,8 +51,10 @@ const DynamicCoverImage: React.FC<DynamicCoverImageProps> = ({ coverBlob, title,
       return () => {
         if (url) URL.revokeObjectURL(url);
       };
+    } else {
+      setCoverUrl(null);
     }
-  }, [coverBlob]);
+  }, [coverDataUrl, coverBlob]);
 
   if (coverUrl) {
     return <img src={coverUrl} alt={title} className={className} />;
@@ -97,11 +111,12 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
           flexShrink: 0
         }}
       >
-        <DynamicCoverImage 
-          coverBlob={c.coverBlob} 
-          title={c.title} 
-          className="drawer-cover" 
-          fallbackClassName="drawer-cover-placeholder" 
+        <DynamicCoverImage
+          coverBlob={c.coverBlob}
+          coverDataUrl={c.coverDataUrl}
+          title={c.title}
+          className="drawer-cover"
+          fallbackClassName="drawer-cover-placeholder"
         />
         
         {progressPercent > 0 && (
@@ -118,7 +133,7 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             <div
               style={{
                 height: '100%',
-                backgroundColor: isCompleted ? '#4caf50' : 'var(--accent)', 
+                backgroundColor: isCompleted ? 'var(--success)' : 'var(--accent)',
                 width: `${Math.min(100, progressPercent)}%` 
               }}
             />
@@ -133,8 +148,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
         }}>
           {isCompleted ? (
             <span style={{
-              backgroundColor: '#4caf50',
-              color: '#ffffff',
+              backgroundColor: 'var(--success)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: 'bold',
               padding: '2px 6px',
@@ -143,8 +158,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             }}>✓</span>
           ) : isUnread ? (
             <span style={{
-              backgroundColor: '#aa3bff',
-              color: '#ffffff',
+              backgroundColor: 'var(--accent)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: 'bold',
               padding: '2px 6px',
@@ -153,8 +168,8 @@ const DrawerComicCard: React.FC<DrawerComicCardProps> = ({ c, isActive, onClick 
             }}>Новый</span>
           ) : (
             <span style={{
-              backgroundColor: 'rgba(0, 0, 0, 0.75)',
-              color: '#ffffff',
+              backgroundColor: 'var(--bg-translucent)',
+              color: 'var(--text-on-accent)',
               fontSize: '9px',
               fontWeight: '600',
               padding: '2px 5px',
@@ -207,7 +222,6 @@ export const Reader: React.FC<ReaderProps> = ({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [showNextOverlay, setShowNextOverlay] = useState(false);
   const [pageUrl, setPageUrl] = useState<string | null>(null);
-  const [nextPageUrl, setNextPageUrl] = useState<string | null>(null);
   const [isLoadingPage, setIsLoadingPage] = useState(false);
   const [isHudActive, setIsHudActive] = useState(true);
   
@@ -260,6 +274,10 @@ export const Reader: React.FC<ReaderProps> = ({
   const startDragOffset = useRef({ x: 0, y: 0 });
   const lastTapTime = useRef(0);
   const latestLoadId = useRef(0);
+  // Рефы владеют жизненным циклом object-URL страниц: стейт нужен только
+  // для отрисовки, а ревок происходит по рефам — без гонок с re-render.
+  const pageUrlRef = useRef<string | null>(null);
+  const nextPageUrlRef = useRef<string | null>(null);
   
   // Touch swipe states
   const [swipeTranslation, setSwipeTranslation] = useState(0);
@@ -269,20 +287,49 @@ export const Reader: React.FC<ReaderProps> = ({
 
   const webtoonContainerRef = useRef<HTMLDivElement>(null);
 
+  // Refs для зума/пана — жесты читают СВЕЖИЕ значения внутри серии
+  // pointer-событий (стейт может отставать между событиями). ВАЖНО: рефы
+  // обновляются ТОЛЬКО через setZoom/setPan (вместе со стейтом) — никаких
+  // обратных синхронизаций из useEffect (иначе быстрые события пинча
+  // перетирают реф устаревшим стейтом, и панорама «улетает»).
+  const zoomScaleRef = useRef(1);
+  const panOffsetRef = useRef({ x: 0, y: 0 });
+  const setZoom = useCallback((z: number) => {
+    zoomScaleRef.current = z;
+    setZoomScale(z);
+  }, []);
+  const setPan = useCallback((p: { x: number; y: number }) => {
+    panOffsetRef.current = p;
+    setPanOffset(p);
+  }, []);
+
   // Reset zoom & pan
   const resetZoom = useCallback(() => {
-    setZoomScale(1);
-    setPanOffset({ x: 0, y: 0 });
-  }, []);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [setZoom, setPan]);
 
   // Helper to fetch page Blob depending on format
   const fetchPageBlob = useCallback(async (index: number): Promise<Blob> => {
     if (comic.format === 'pdf') {
+      if (isAndroid()) {
+        // Android: страница рендерится нативным PdfRenderer (pdf.js не может
+        // прочитать SAF content:// через fetch — asset-протокол Tauri его
+        // не отдаёт). data-URL из invoke превращаем в Blob напрямую через
+        // base64ToBlob: fetch() на data: URL в Android WebView падает с
+        // «Failed to fetch» (CBZ-путь уже использует base64ToBlob).
+        const dataUrl = await getPdfPageNative(comic.uri, String(index + 1));
+        if (!dataUrl) throw new Error('Не удалось прочитать PDF-страницу.');
+        return base64ToBlob(dataUrl);
+      }
+      if (!fileBlob) throw new Error('PDF file blob is required for reading.');
       return await getPdfPageBlob(comic.id, fileBlob, index + 1);
     } else {
-      return await getPageBlob(comic.id, fileBlob, comic.pages[index]);
+      // CBZ in Tauri: `uri` is the absolute file path Rust reads from disk.
+      // `fileBlob` is only used on the web fallback path (JSZip).
+      return await getPageBlob(comic.uri, fileBlob, comic.pages[index]);
     }
-  }, [comic.id, comic.pages, comic.format, fileBlob]);
+  }, [comic.uri, comic.pages, comic.format, comic.id, fileBlob]);
 
   // Prefetch adjacent page
   const prefetchNextPage = useCallback(async (nextIdx: number) => {
@@ -290,12 +337,17 @@ export const Reader: React.FC<ReaderProps> = ({
       try {
         const nextBlob = await fetchPageBlob(nextIdx);
         const url = URL.createObjectURL(nextBlob);
-        setNextPageUrl(url);
+        // Заменить непотреблённый prefetch (если листали быстрее, чем он грузился).
+        if (nextPageUrlRef.current) URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = url;
       } catch (err) {
         console.warn('Failed to prefetch next page:', err);
       }
     } else {
-      setNextPageUrl(null);
+      if (nextPageUrlRef.current) {
+        URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = null;
+      }
     }
   }, [comic.pages.length, fetchPageBlob]);
 
@@ -304,22 +356,24 @@ export const Reader: React.FC<ReaderProps> = ({
     setIsLoadingPage(true);
     const loadId = ++latestLoadId.current;
     try {
-      // Clear previous page url to avoid memory leaks
-      if (pageUrl && pageUrl !== nextPageUrl) {
-        URL.revokeObjectURL(pageUrl);
+      // Ревок предыдущей страницы — по рефам, чтобы никогда не задеть
+      // prefetch, который вот-вот будет использован.
+      if (pageUrlRef.current && pageUrlRef.current !== nextPageUrlRef.current) {
+        URL.revokeObjectURL(pageUrlRef.current);
+        pageUrlRef.current = null;
       }
 
-      // If we jumped to a page that isn't the next page, revoke prefetch to prevent memory leak
-      if (nextPageUrl && index !== currentPage + 1) {
-        URL.revokeObjectURL(nextPageUrl);
-        setNextPageUrl(null);
+      // Если прыгнули мимо prefetch-страницы — он больше не нужен.
+      if (nextPageUrlRef.current && index !== currentPage + 1) {
+        URL.revokeObjectURL(nextPageUrlRef.current);
+        nextPageUrlRef.current = null;
       }
 
       let newUrl: string;
-      // If we already prefetched this page, use it!
-      if (nextPageUrl && index === currentPage + 1) {
-        newUrl = nextPageUrl;
-        setNextPageUrl(null);
+      // Если prefetch уже на месте — используем его без повторной загрузки.
+      if (nextPageUrlRef.current && index === currentPage + 1) {
+        newUrl = nextPageUrlRef.current;
+        nextPageUrlRef.current = null;
       } else {
         const blob = await fetchPageBlob(index);
         newUrl = URL.createObjectURL(blob);
@@ -331,6 +385,7 @@ export const Reader: React.FC<ReaderProps> = ({
         return;
       }
 
+      pageUrlRef.current = newUrl;
       setPageUrl(newUrl);
 
       if (!settings.zoomLock) {
@@ -352,34 +407,50 @@ export const Reader: React.FC<ReaderProps> = ({
         setIsLoadingPage(false);
       }
     }
-  }, [currentPage, pageUrl, nextPageUrl, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
+  }, [currentPage, settings.zoomLock, settings.direction, resetZoom, prefetchNextPage, fetchPageBlob, comic.id]);
 
-  // Init mode transitions
+  // Init / mode transitions: прыжок к текущей странице нужен ТОЛЬКО при
+  // открытии ридера или смене режима на webtoon. НЕ вешаем на currentPage:
+  // при скролле ленты currentPage обновляется IntersectionObserver'ом, и
+  // перезапуск эффекта заставлял ленту «сама прыгать» (автоскроллинг).
   useEffect(() => {
     if (settings.mode === 'webtoon') {
-      setTimeout(() => {
-        const pageEl = document.getElementById(`webtoon-page-${currentPage}`);
-        pageEl?.scrollIntoView({ block: 'start' });
+      const timer = setTimeout(() => {
+        const pageEl = document.getElementById(`webtoon-page-${currentPageRef.current}`);
+        pageEl?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
       }, 500);
-    } else {
-      loadPage(currentPage);
+      return () => clearTimeout(timer);
     }
-
-    return () => {
-      // Cleanup URLs
-      if (pageUrl) URL.revokeObjectURL(pageUrl);
-      if (nextPageUrl) URL.revokeObjectURL(nextPageUrl);
-      clearCBZCache();
-      clearPDFCache();
-    };
+    // currentPage намеренно НЕ в deps — см. комментарий выше.
   }, [settings.mode]);
+
+  // Unmount cleanup: object-URL страниц + кэши (по рефам — ревок никогда
+  // не сработает во время активного отображения страницы). Плюс закрываем
+  // нативный кэш открытой книги (дескриптор файла) и отменяем rAF слайдера.
+  useEffect(() => {
+    // Пока читалка открыта — боковые края экрана не перехватываются
+    // системной жесты-навигацией Android (свайпы листания от края).
+    setReaderActive(true);
+    return () => {
+      setReaderActive(false);
+      if (webtoonScrollRafRef.current != null) {
+        cancelAnimationFrame(webtoonScrollRafRef.current);
+        webtoonScrollRafRef.current = null;
+      }
+      if (pageUrlRef.current) URL.revokeObjectURL(pageUrlRef.current);
+      if (nextPageUrlRef.current) URL.revokeObjectURL(nextPageUrlRef.current);
+      clearPDFCache();
+      clearPdfPageCache();
+      releaseReaderFile(comic.uri);
+    };
+  }, []);
 
   // Sync page changes in paged mode
   useEffect(() => {
     if (settings.mode === 'paged') {
       loadPage(currentPage);
     }
-  }, [currentPage, settings.mode]);
+  }, [currentPage, settings.mode, loadPage]);
 
   // Handle page turns (paged mode)
   const turnPage = useCallback((dir: 'next' | 'prev') => {
@@ -408,18 +479,33 @@ export const Reader: React.FC<ReaderProps> = ({
 
     if (goForward) {
       if (currentPage < comic.totalPages - 1) {
-        setCurrentPage((prev) => prev + 1);
+        goToPage(currentPage + 1);
         setSplitPart(null);
       } else if (nextComic) {
         setShowNextOverlay(true);
       }
     } else {
       if (currentPage > 0) {
-        setCurrentPage((prev) => prev - 1);
+        goToPage(currentPage - 1);
         setSplitPart(null);
       }
     }
-  }, [currentPage, comic.totalPages, settings.direction, settings.splitDoublePages, isLandscape, splitPart, nextComic]);
+  }, [currentPage, comic.totalPages, settings.direction, settings.splitDoublePages, isLandscape, splitPart, nextComic, settings.mode]);
+
+  // Программное листание (кнопки, жесты, автопропрутка): в webtoon-ленте
+  // прокручиваем к целевой странице. Обычный скролл пользователя это НЕ
+  // вызывает (там currentPage меняется наблюдателем видимости, и лента не
+  // «прыгает» сама) — только явные переходы. behavior:'instant' — прыжок
+  // сразу к месту (без анимации через все промежуточные страницы).
+  const goToPage = (target: number) => {
+    setCurrentPage(target);
+    if (settings.mode === 'webtoon') {
+      setTimeout(() => {
+        document.getElementById(`webtoon-page-${target}`)?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+      }, 50);
+    }
+    ensureAutoPlayRunning();
+  };
 
   // Image load helper to detect aspect ratio
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
@@ -433,52 +519,178 @@ export const Reader: React.FC<ReaderProps> = ({
     }
   };
 
-  // Keyboard navigation & Volume keys overrides
+  // Keyboard navigation (стрелки / пробел; клавиши громкости приходят
+  // нативным путём — см. обработчик nativeVolumeKey ниже)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Paged navigation
-      if (settings.mode === 'paged') {
-        if (e.key === 'ArrowRight' || e.key === ' ') {
-          e.preventDefault();
-          turnPage('next');
-        } else if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          turnPage('prev');
-        }
-      }
-
-      // Volume buttons page turning (VolumeUp / VolumeDown overrides)
-      if (settings.volumeKeysEnabled) {
-        if (e.key === 'VolumeUp' || e.key === 'AudioVolumeUp') {
-          e.preventDefault();
-          turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
-        } else if (e.key === 'VolumeDown' || e.key === 'AudioVolumeDown') {
-          e.preventDefault();
-          turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
-        }
+      if (settings.mode !== 'paged') return;
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault();
+        turnPage('next');
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        turnPage('prev');
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [settings.mode, settings.volumeKeysEnabled, settings.direction, turnPage]);
+  }, [settings.mode, turnPage]);
 
-  // Listener for native volume keys override (dispatched from Java)
+  // Native volume keys (события от MainActivity с repeat-счётчиком):
+  //  - "single" — одна страница на одно нажатие (повторы удержания игнорируются);
+  //  - "auto"   — автопропрутка: файл листается САМ с интервалом
+  //               VOLUME_AUTO_SPEED_MS, кнопка громкости — пауза/продолжение.
+  const turnPageRef = useRef(turnPage);
+  const currentPageRef = useRef(currentPage);
   useEffect(() => {
+    turnPageRef.current = turnPage;
+  }, [turnPage]);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  // ── Автопропрутка (режим "auto") ───────────────────────────────────────
+  // «Включил — и файл листается сам»: после открытия ридера страницы
+  // перелистываются автоматически, пока режим включён. Остановки: конец
+  // книги, пауза (кнопка громкости / пилюля в HUD), смена режима, выход.
+  const [autoPlayPaused, setAutoPlayPaused] = useState(false);
+  const autoPlayPausedRef = useRef(false);
+  const autoPlayStoppedRef = useRef(false);
+  const autoPlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Рефы для «в конце книги открыть следующую»: замыкание тика должно видеть
+  // СВЕЖИЕ значения (настройка может поменяться, список полки — тоже).
+  const autoOpenNextRef = useRef(settings.autoOpenNext);
+  const nextComicRef = useRef(nextComic);
+  const onSelectComicRef = useRef(onSelectComic);
+  useEffect(() => {
+    autoOpenNextRef.current = settings.autoOpenNext;
+  }, [settings.autoOpenNext]);
+  useEffect(() => {
+    nextComicRef.current = nextComic;
+  }, [nextComic]);
+  useEffect(() => {
+    onSelectComicRef.current = onSelectComic;
+  }, [onSelectComic]);
+
+  // Цепочка setTimeout (не setInterval): каждый тик перепланируется и берёт
+  // СВЕЖУЮ страницу через currentPageRef — замыкание никогда не устаревает.
+  const scheduleAutoPlayTick = useCallback(() => {
+    if (autoPlayTimerRef.current) clearTimeout(autoPlayTimerRef.current);
+    autoPlayTimerRef.current = setTimeout(() => {
+      autoPlayTimerRef.current = null;
+      if (autoPlayStoppedRef.current || autoPlayPausedRef.current) return;
+      // Конец книги: либо автопропрутка завершена, либо (если включено в
+      // настройках) автоматически открываем следующую книгу с полки.
+      if (currentPageRef.current >= comic.totalPages - 1) {
+        if (autoOpenNextRef.current && nextComicRef.current) {
+          onSelectComicRef.current(nextComicRef.current.id);
+        }
+        return;
+      }
+      goToPage(currentPageRef.current + 1);
+      scheduleAutoPlayTick();
+    }, settings.volumeKeySpeed * 1000);
+    // settings.mode в deps: при смене режима цепочка пересоздаётся со свежим
+    // goToPage (иначе замыкание листало бы по старому режиму).
+  }, [comic.totalPages, settings.volumeKeySpeed, settings.mode]);
+
+  const stopAutoPlay = useCallback(() => {
+    autoPlayStoppedRef.current = true;
+    if (autoPlayTimerRef.current) {
+      clearTimeout(autoPlayTimerRef.current);
+      autoPlayTimerRef.current = null;
+    }
+  }, []);
+
+  const toggleAutoPlay = useCallback(() => {
+    autoPlayPausedRef.current = !autoPlayPausedRef.current;
+    setAutoPlayPaused(autoPlayPausedRef.current);
+    if (!autoPlayPausedRef.current && !autoPlayStoppedRef.current) {
+      // Возобновление — перезапускаем цепочку.
+      scheduleAutoPlayTick();
+    }
+  }, [scheduleAutoPlayTick]);
+
+  // Перезапуск цепочки после ручной навигации (кнопки, ползунок): если
+  // автопропрутка «завершилась» на конце книги, а пользователь вернулся
+  // назад — листание продолжается само.
+  const ensureAutoPlayRunning = useCallback(() => {
+    if (settings.volumeKeysEnabled === 'auto' && !autoPlayPausedRef.current && !autoPlayStoppedRef.current) {
+      scheduleAutoPlayTick();
+    }
+  }, [settings.volumeKeysEnabled, scheduleAutoPlayTick]);
+
+  // Старт/стоп при смене режима листания (и при смене скорости).
+  useEffect(() => {
+    if (settings.volumeKeysEnabled === 'auto') {
+      autoPlayStoppedRef.current = false;
+      autoPlayPausedRef.current = false;
+      setAutoPlayPaused(false);
+      // Небольшая задержка — дать увидеть первую страницу.
+      const startTimer = setTimeout(() => {
+        if (!autoPlayStoppedRef.current && !autoPlayPausedRef.current) {
+          scheduleAutoPlayTick();
+        }
+      }, 1500);
+      return () => {
+        clearTimeout(startTimer);
+        stopAutoPlay();
+      };
+    }
+    stopAutoPlay();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.volumeKeysEnabled, scheduleAutoPlayTick, stopAutoPlay]);
+
+  // Пауза, когда приложение ушло в фон; продолжение при возврате.
+  useEffect(() => {
+    if (settings.volumeKeysEnabled !== 'auto') return;
+    const onVisibility = () => {
+      if (document.hidden) {
+        autoPlayPausedRef.current = true;
+        setAutoPlayPaused(true);
+      } else {
+        autoPlayPausedRef.current = false;
+        setAutoPlayPaused(false);
+        if (!autoPlayStoppedRef.current) scheduleAutoPlayTick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [settings.volumeKeysEnabled, scheduleAutoPlayTick]);
+
+  useEffect(() => {
+    if (settings.volumeKeysEnabled === 'off') return;
+
     const handleNativeVolumeKey = (e: Event) => {
-      if (!settings.volumeKeysEnabled) return;
-      const customEvent = e as CustomEvent<{ key: 'volume_up' | 'volume_down' }>;
-      const keyType = customEvent.detail.key;
-      if (keyType === 'volume_up') {
-        turnPage(settings.direction === 'ltr' ? 'prev' : 'next');
-      } else if (keyType === 'volume_down') {
-        turnPage(settings.direction === 'ltr' ? 'next' : 'prev');
+      const ce = e as CustomEvent<{ key: 'volume_up' | 'volume_down'; repeat: number }>;
+      const { key, repeat } = ce.detail;
+
+      if (settings.volumeKeysEnabled === 'auto') {
+        // Кнопка громкости в режиме автопропрутки — пауза/продолжение.
+        if (repeat === 0) {
+          toggleAutoPlay();
+        }
+        return;
+      }
+
+      // "single": листаем только на первое нажатие; удержание не листает.
+      if (repeat === 0) {
+        const isLtr = settings.direction === 'ltr';
+        const dir: 'next' | 'prev' = key === 'volume_up'
+          ? (isLtr ? 'prev' : 'next')
+          : (isLtr ? 'next' : 'prev');
+        turnPageRef.current(dir);
       }
     };
 
     window.addEventListener('nativeVolumeKey', handleNativeVolumeKey);
-    return () => window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
-  }, [settings.volumeKeysEnabled, settings.direction, turnPage]);
+    return () => {
+      window.removeEventListener('nativeVolumeKey', handleNativeVolumeKey);
+    };
+    // ВАЖНО: turnPage НЕ в deps — иначе эффект перезапускался бы на каждом
+    // листании (turnPage меняется вместе с currentPage). Используем ref.
+  }, [settings.volumeKeysEnabled, settings.direction, toggleAutoPlay]);
 
   // Webtoon scroll dynamic page visibility callback
   const handlePageVisibleInWebtoon = useCallback((index: number) => {
@@ -492,7 +704,7 @@ export const Reader: React.FC<ReaderProps> = ({
     const DOUBLE_TAP_DELAY = 300;
     
     if (now - lastTapTime.current < DOUBLE_TAP_DELAY) {
-      if (zoomScale > 1) {
+      if (zoomScaleRef.current > 1) {
         resetZoom();
       } else {
         // Zoom in to 2.5x at tap location
@@ -505,18 +717,49 @@ export const Reader: React.FC<ReaderProps> = ({
           const newX = (rect.width / 2 - tapX) * 1.5;
           const newY = (rect.height / 2 - tapY) * 1.5;
           
-          setZoomScale(2.5);
-          setPanOffset({ x: newX, y: newY });
+          setZoom(2.5);
+          setPan({ x: newX, y: newY });
         }
       }
     }
     lastTapTime.current = now;
   };
 
-  // Pointer dragging (Panning when zoomed, swiping when 1x zoom)
+  // Pointer dragging (Panning when zoomed, swiping when 1x zoom).
+  // Обработчики висят на .reader-viewport (общий родитель hotspots и
+  // paged-container); в webtoon-режиме они неактивны (там своя прокрутка).
+  // Два пальца — пинч: приближение и отдаление (1x..5x), точка под серединой
+  // пальцев остаётся неподвижной. Отдалить можно всегда — пинч «сводит»
+  // масштаб обратно к 1 (и панель обнуляется).
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchBaseRef = useRef<{ dist: number; zoom: number; panX: number; panY: number } | null>(null);
+
   const handlePointerDown = (e: React.PointerEvent) => {
-    if (zoomScale === 1) {
-      handleDoubleTap(e.clientX, e.clientY);
+    if (settings.mode !== 'paged') return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2) {
+      // Второй палец: начинаем пинч, свайп отменяем. База фиксируется ОДИН
+      // раз (расстояние, зум и панорама на старте) — от неё считается всё.
+      isSwipeDragging.current = false;
+      isDragging.current = false;
+      setSwipeTranslation(0);
+      const [a, b] = [...pointersRef.current.values()];
+      pinchBaseRef.current = {
+        dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+        zoom: zoomScaleRef.current,
+        panX: panOffsetRef.current.x,
+        panY: panOffsetRef.current.y,
+      };
+      return;
+    }
+
+    // Дабл-тап ВСЕГДА: при зуме 1 — приближение, при зуме >1 — сброс к 1.
+    // (Раньше вызывался только при zoom===1, поэтому «уменьшить обратно»
+    // двойным тапом было нельзя — нажатие уходило в ветку панорамирования.)
+    handleDoubleTap(e.clientX, e.clientY);
+
+    if (zoomScaleRef.current === 1) {
       // Track swipes only in paged mode
       if (settings.mode === 'paged') {
         touchStartX.current = e.clientX;
@@ -528,14 +771,40 @@ export const Reader: React.FC<ReaderProps> = ({
     }
     isDragging.current = true;
     startDragOffset.current = {
-      x: e.clientX - panOffset.x,
-      y: e.clientY - panOffset.y,
+      x: e.clientX - panOffsetRef.current.x,
+      y: e.clientY - panOffsetRef.current.y,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-    if (zoomScale === 1) {
+    if (settings.mode !== 'paged') return;
+    const pointers = pointersRef.current;
+    if (pointers.has(e.pointerId)) {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Пинч: масштаб от расстояния между пальцами. Точка под серединой пальцев
+    // остаётся неподвижной — формула использует панораму НА СТАРТЕ пинча
+    // (base.panX/panY), а не текущую: иначе каждый тик пере-якоривает и
+    // панорама экспоненциально «улетает».
+    if (pointers.size === 2 && pinchBaseRef.current) {
+      const [a, b] = [...pointers.values()];
+      const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+      const midX = (a.x + b.x) / 2;
+      const midY = (a.y + b.y) / 2;
+      const base = pinchBaseRef.current;
+      const nextZoom = Math.max(1, Math.min(5, base.zoom * (dist / base.dist)));
+      const nextPan = {
+        x: midX - (midX - base.panX) * (nextZoom / base.zoom),
+        y: midY - (midY - base.panY) * (nextZoom / base.zoom),
+      };
+      setZoom(nextZoom);
+      setPan(nextPan);
+      return;
+    }
+
+    if (zoomScaleRef.current === 1) {
       if (!isSwipeDragging.current) return;
       const deltaX = e.clientX - touchStartX.current;
       const deltaY = e.clientY - touchStartY.current;
@@ -551,14 +820,31 @@ export const Reader: React.FC<ReaderProps> = ({
     const newY = e.clientY - startDragOffset.current.y;
     
     // Boundary check to keep images inside screen
-    setPanOffset({ x: newX, y: newY });
+    setPan({ x: newX, y: newY });
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-    if (zoomScale === 1) {
+    if (settings.mode !== 'paged') return;
+    pointersRef.current.delete(e.pointerId);
+
+    if (pinchBaseRef.current && pointersRef.current.size < 2) {
+      // Пинч завершён. Если масштаб вернулся к 1 — панель обнуляется,
+      // иначе остаётся как есть (страница приближена/отдалена).
+      pinchBaseRef.current = null;
+      if (zoomScaleRef.current === 1) {
+        resetZoom();
+      }
+      return;
+    }
+
+    if (zoomScaleRef.current === 1) {
       if (!isSwipeDragging.current) return;
       isSwipeDragging.current = false;
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* pointer capture мог уже сняться системой — не критично */
+      }
       
       const deltaX = e.clientX - touchStartX.current;
       setSwipeTranslation(0); // Trigger snap back transition
@@ -574,7 +860,11 @@ export const Reader: React.FC<ReaderProps> = ({
       return;
     }
     isDragging.current = false;
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
   };
 
   // Toggle HUD Overlay
@@ -582,21 +872,39 @@ export const Reader: React.FC<ReaderProps> = ({
     setIsHudActive((prev) => !prev);
   };
 
-  // Slide handle fast change
+  // Slide handle fast change. В webtoon-ленте скролл к целевой странице
+  // троттлится через requestAnimationFrame: при быстром перетаскивании
+  // ползунка выполняется ТОЛЬКО последняя позиция за кадр, а не каждая
+  // промежуточная — иначе лента «пролистывается» через все страницы.
+  const webtoonScrollRafRef = useRef<number | null>(null);
+  const webtoonTargetRef = useRef(-1);
+
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const pageIndex = parseInt(e.target.value);
     setCurrentPage(pageIndex);
     
     if (settings.mode === 'webtoon') {
-      const pageEl = document.getElementById(`webtoon-page-${pageIndex}`);
-      pageEl?.scrollIntoView({ block: 'start' });
+      webtoonTargetRef.current = pageIndex;
+      if (webtoonScrollRafRef.current == null) {
+        webtoonScrollRafRef.current = requestAnimationFrame(() => {
+          webtoonScrollRafRef.current = null;
+          const target = webtoonTargetRef.current;
+          document.getElementById(`webtoon-page-${target}`)?.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior });
+        });
+      }
     }
+    // Перетащили ползунок в режиме автопропрутки — листание продолжается.
+    ensureAutoPlayRunning();
   };
 
-  // Filter Styles for Brightness and Contrast
-  const filterStyles = {
-    filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)`,
-  };
+  // Filter Styles for Brightness and Contrast (мемоизованы — иначе каждый
+  // скролл в webtoon пересоздаёт объект и ререндерит все страницы ленты)
+  const filterStyles = useMemo(
+    () => ({
+      filter: `brightness(${settings.brightness}%) contrast(${settings.contrast}%)`,
+    }),
+    [settings.brightness, settings.contrast],
+  );
 
   return (
     <div className="reader-container">
@@ -611,7 +919,7 @@ export const Reader: React.FC<ReaderProps> = ({
             <button 
               className="btn-icon" 
               onClick={() => setIsDrawerOpen(true)} 
-              title="Выпуски на полке"
+              title="Книги на полке"
               style={{ marginRight: '4px' }}
             >
               <LayoutGrid size={20} />
@@ -624,9 +932,16 @@ export const Reader: React.FC<ReaderProps> = ({
       </div>
 
       {/* Viewport Area */}
+      {/* Pointer-обработчики свайпов/пана здесь: nav-hotspot'ы — сиблинги
+          paged-container (оба внутри viewport), поэтому события от них
+          всплывают только до viewport'а. */}
       <div 
         className={`reader-viewport ${settings.mode === 'webtoon' ? 'webtoon-mode' : ''}`}
-        ref={settings.mode === 'webtoon' ? webtoonContainerRef : null}
+        ref={settings.mode === 'webtoon' ? webtoonContainerRef : viewportRef}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
       >
         {/* Hotspots for Paged turning */}
         {settings.mode === 'paged' && zoomScale === 1 && (
@@ -663,6 +978,7 @@ export const Reader: React.FC<ReaderProps> = ({
                 fetchPageBlob={fetchPageBlob}
                 onVisible={handlePageVisibleInWebtoon}
                 filterStyles={filterStyles}
+                aspectRatio={comic.aspectRatios?.[idx] ?? null}
               />
             ))}
           </div>
@@ -672,11 +988,7 @@ export const Reader: React.FC<ReaderProps> = ({
         {settings.mode === 'paged' && pageUrl && (
           <div className="paged-container">
             <div
-              ref={viewportRef}
               className="page-image-wrapper"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
               style={{
                 transform: `translate(${panOffset.x + swipeTranslation}px, ${panOffset.y}px) scale(${zoomScale})`,
                 transition: swipeTranslation === 0 ? 'transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none',
@@ -748,6 +1060,17 @@ export const Reader: React.FC<ReaderProps> = ({
       {/* Bottom HUD */}
       <div className={`reader-hud reader-hud-bottom ${isHudActive ? 'active' : ''}`}>
         <div className="hud-progress-row">
+          {settings.volumeKeysEnabled === 'auto' && (
+            <button
+              className={`autoplay-pill ${autoPlayPaused ? 'paused' : ''}`}
+              onClick={toggleAutoPlay}
+              aria-label={autoPlayPaused ? 'Продолжить автопропрутку' : 'Поставить автопропрутку на паузу'}
+              title={autoPlayPaused ? 'Продолжить автопропрутку' : 'Поставить на паузу'}
+            >
+              {autoPlayPaused ? <Play size={14} /> : <Pause size={14} />}
+              <span>Автопропрутка</span>
+            </button>
+          )}
           <input
             type="range"
             min="0"
@@ -767,7 +1090,7 @@ export const Reader: React.FC<ReaderProps> = ({
         <div className={`reader-drawer-overlay ${isDrawerOpen ? 'active' : ''}`} onClick={() => setIsDrawerOpen(false)}>
           <div className="reader-drawer" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
             <div className="drawer-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid var(--border-color)', gap: '12px' }}>
-              <span className="drawer-title" style={{ fontSize: '18px', fontWeight: 'bold' }}>Выпуски на полке ({shelfComics.length})</span>
+              <span className="drawer-title" style={{ fontSize: '18px', fontWeight: 'bold' }}>Книги на полке ({shelfComics.length})</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <select
                   value={drawerSort}
@@ -799,7 +1122,7 @@ export const Reader: React.FC<ReaderProps> = ({
                 </button>
               </div>
             </div>
-            <div className="drawer-comic-list" style={{ flex: 1, overflowX: 'auto', padding: '16px 8px', display: 'flex', gap: '16px', scrollbarWidth: 'thin' }}>
+            <div className="drawer-comic-list" style={{ flex: 1, padding: '16px 8px' }}>
               {sortedShelfComics.map((c) => (
                 <DrawerComicCard
                   key={c.id}
@@ -822,9 +1145,9 @@ export const Reader: React.FC<ReaderProps> = ({
       {showNextOverlay && nextComic && (
         <div className="next-issue-overlay">
           <div className="next-issue-card">
-            <span className="next-issue-badge">Выпуск прочитан!</span>
-            <DynamicCoverImage coverBlob={nextComic.coverBlob} title={nextComic.title} className="next-issue-cover" fallbackClassName="next-issue-cover-placeholder" />
-            <h4 className="next-issue-title">Открыть следующий выпуск?</h4>
+            <span className="next-issue-badge">Книга прочитана!</span>
+            <DynamicCoverImage coverBlob={nextComic.coverBlob} coverDataUrl={nextComic.coverDataUrl} title={nextComic.title} className="next-issue-cover" fallbackClassName="next-issue-cover-placeholder" />
+            <h4 className="next-issue-title">Открыть следующую книгу?</h4>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', wordBreak: 'break-word' }}>{nextComic.title}</p>
             <div className="next-issue-actions">
               <button
@@ -847,6 +1170,7 @@ export const Reader: React.FC<ReaderProps> = ({
           </div>
         </div>
       )}
+
     </div>
   );
 };
@@ -859,97 +1183,113 @@ interface WebtoonPageWrapperProps {
   fetchPageBlob: (index: number) => Promise<Blob>;
   onVisible: (index: number) => void;
   filterStyles: React.CSSProperties;
+  /** Реальная пропорция страницы (w/h) из метаданных — резервирует высоту
+   *  ДО загрузки картинки, чтобы лента не «прыгала» при скролле. */
+  aspectRatio: number | null;
 }
 
-const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = ({
-  index,
-  fetchPageBlob,
-  onVisible,
-  filterStyles
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [imgUrl, setImgUrl] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
-  
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      async (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting) {
-          onVisible(index);
-          
-          // Lazy load page blob
-          if (!imgUrl) {
-            try {
-              const blob = await fetchPageBlob(index);
-              const url = URL.createObjectURL(blob);
-              setImgUrl(url);
-            } catch (err) {
-              console.error(`Failed to load Webtoon page ${index}:`, err);
+const WebtoonPageWrapper: React.FC<WebtoonPageWrapperProps> = React.memo(
+  ({ index, fetchPageBlob, onVisible, filterStyles, aspectRatio }) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [imgUrl, setImgUrl] = useState<string | null>(null);
+    const [loadedRatio, setLoadedRatio] = useState<number | null>(null);
+    // Реф владеет URL: observer-колбэк читает/пишет его, а state только
+    // отражает текущий URL для отрисовки. Раньше `imgUrl` был в deps —
+    // cleanup ревокал URL ещё показываемой картинки (гонка с async-загрузкой).
+    const imgUrlRef = useRef<string | null>(null);
+
+    // Плейсхолдер резервирует РЕАЛЬНУЮ высоту страницы (из метаданных),
+    // поэтому при загрузке картинки лента не сдвигается.
+    const displayRatio = loadedRatio ?? aspectRatio;
+
+    const setUrl = (url: string | null) => {
+      imgUrlRef.current = url;
+      setImgUrl(url);
+    };
+
+    useEffect(() => {
+      let cancelled = false;
+      const observer = new IntersectionObserver(
+        async (entries) => {
+          const entry = entries[0];
+          if (entry.isIntersecting) {
+            onVisible(index);
+
+            // Lazy load page blob (только если ещё не загружена)
+            if (!imgUrlRef.current) {
+              try {
+                const blob = await fetchPageBlob(index);
+                if (cancelled) return; // компонент размонтирован — blob просто выбрасываем
+                setUrl(URL.createObjectURL(blob));
+              } catch (err) {
+                console.error(`Failed to load Webtoon page ${index}:`, err);
+              }
+            }
+          } else {
+            // Offload image if scrolled far away to protect RAM memory
+            if (imgUrlRef.current) {
+              URL.revokeObjectURL(imgUrlRef.current);
+              setUrl(null);
             }
           }
-        } else {
-          // Offload image if scrolled far away to protect RAM memory
-          if (imgUrl) {
-            URL.revokeObjectURL(imgUrl);
-            setImgUrl(null);
-          }
-        }
-      },
-      {
-        rootMargin: '1000px 0px', // Load images 1000px before entering viewport
-        threshold: 0.01
+        },
+        {
+          rootMargin: '1000px 0px', // Load images 1000px before entering viewport
+          threshold: 0.01,
+        },
+      );
+
+      if (containerRef.current) {
+        observer.observe(containerRef.current);
       }
-    );
 
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
+      return () => {
+        cancelled = true;
+        observer.disconnect();
+        if (imgUrlRef.current) {
+          URL.revokeObjectURL(imgUrlRef.current);
+          imgUrlRef.current = null;
+        }
+      };
+    }, [index, fetchPageBlob, onVisible]);
 
-    return () => {
-      observer.disconnect();
-      if (imgUrl) {
-        URL.revokeObjectURL(imgUrl);
+    const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const img = e.currentTarget;
+      if (img.naturalWidth && img.naturalHeight) {
+        setLoadedRatio(img.naturalWidth / img.naturalHeight);
       }
     };
-  }, [index, fetchPageBlob, imgUrl]);
 
-  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
-    const img = e.currentTarget;
-    if (img.naturalWidth && img.naturalHeight) {
-      setAspectRatio(img.naturalWidth / img.naturalHeight);
-    }
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      id={`webtoon-page-${index}`}
-      style={{
-        width: '100%',
-        aspectRatio: aspectRatio ? `${aspectRatio}` : '2/3',
-        backgroundColor: '#000000',
-        minHeight: '200px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      {imgUrl ? (
-        <img
-          src={imgUrl}
-          alt={`Страница ${index + 1}`}
-          onLoad={handleImageLoad}
-          style={{
-            width: '100%',
-            height: 'auto',
-            display: 'block',
-            ...filterStyles,
-          }}
-        />
-      ) : (
-        <div className="spinner" style={{ width: '30px', height: '30px', borderTopColor: 'var(--accent)' }} />
-      )}
-    </div>
-  );
-};
+    return (
+      <div
+        ref={containerRef}
+        id={`webtoon-page-${index}`}
+        style={{
+          width: '100%',
+          aspectRatio: displayRatio ? `${displayRatio}` : '2/3',
+          backgroundColor: '#000000',
+          minHeight: '200px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {imgUrl ? (
+          <img
+            src={imgUrl}
+            alt={`Страница ${index + 1}`}
+            onLoad={handleImageLoad}
+            style={{
+              width: '100%',
+              height: 'auto',
+              display: 'block',
+              ...filterStyles,
+            }}
+          />
+        ) : (
+          <div className="spinner" style={{ width: '30px', height: '30px', borderTopColor: 'var(--accent)' }} />
+        )}
+      </div>
+    );
+  },
+);

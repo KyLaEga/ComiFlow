@@ -37,8 +37,8 @@ class ErrorBoundary extends Component<Props, State> {
           alignItems: 'center',
           justifyContent: 'center',
           height: '100vh',
-          backgroundColor: '#121316',
-          color: '#f8f9fa',
+          backgroundColor: 'var(--bg-primary, #121316)',
+          color: 'var(--text-primary, #f8f9fa)',
           fontFamily: 'system-ui, sans-serif',
           padding: '24px',
           textAlign: 'center'
@@ -79,31 +79,3 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 )
-
-// Handle service worker registration/unregistration for Capacitor vs PWA
-const isCapacitor = !!(window as any).Capacitor || !!(window as any).ComiFlowBridge;
-
-if ('serviceWorker' in navigator) {
-  if (isCapacitor) {
-    // Unregister any legacy service workers on Capacitor to prevent caching index.html (which causes white screen on updates)
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      let shouldReload = false;
-      for (const registration of registrations) {
-        registration.unregister();
-        shouldReload = true;
-      }
-      if (shouldReload) {
-        console.log('SW unregistered. Reloading to clear caches.');
-        window.location.reload();
-      }
-    });
-  } else if (import.meta.env.PROD) {
-    // Register PWA service worker only for web environments
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then((reg) => console.log('ServiceWorker registered:', reg.scope))
-        .catch((err) => console.warn('ServiceWorker registration failed:', err));
-    });
-  }
-}
-

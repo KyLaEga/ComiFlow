@@ -1,6 +1,6 @@
 # ComiFlow — Премиальный CBZ/ZIP/PDF Comic & Book Reader для Android
 
-**ComiFlow** — современное, высокопроизводительное PWA-приложение для чтения комиксов, манги и книг в форматах `.cbz`, `.zip` и `.pdf` с нативным Android-контейнером на базе Capacitor.
+**ComiFlow** — современное, высокопроизводительное приложение для чтения комиксов, манги и книг в форматах `.cbz`, `.zip` и `.pdf` с нативным контейнером на базе **Tauri** (Android + macOS/Windows/Linux desktop).
 
 Разработано для максимальной плавности, удобства чтения на экранах телефонов и планшетов, а также полноценной работы **офлайн**.
 
@@ -76,24 +76,38 @@
 
 ---
 
-## 🤖 Интеграция с Android и сборка APK
+## 🤖 Android: сборка APK (Tauri)
 
-Нативный проект расположен в папке `android/` и полностью настроен для сборки в Android Studio.
+Нативный слой перенесён с Capacitor на **Tauri**. Сборка идёт через `cargo tauri android`.
 
-### Шаг 1: Синхронизация кода
-Каждый раз при изменении исходного веб-кода в `src/` выполняйте сборку и копирование ассетов в проект Android:
+### Требования (один раз)
+- Android Studio (ставит JDK 21 и Android SDK)
+- NDK (тестился 28.2.13676358) — через SDK Manager
+- Rust Android targets:
+  ```bash
+  rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+  ```
+- Локальная папка `Rust_Workspace` рядом с проектом (содержит `core_base`, подключён через `path`). Клонируйте репозиторий [KyLaEga/rust-workspace](https://github.com/KyLaEga/rust-workspace) в `../../Rust_Workspace` относительно `src-tauri/`.
+
+### Сборка
 ```bash
-npm run android:sync
+# 1. Сгенерировать Android-проект (один раз и после изменений структуры)
+npx tauri android init
+
+# 2. Установить ComiFlow SAF-плагин в gen/ + зависимость DocumentFile
+bash src-tauri/setup-android-plugin.sh
+
+# 3. Собрать APK (aarch64 — для современных телефонов)
+JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+ANDROID_HOME="$HOME/Library/Android/sdk" \
+NDK_HOME="$HOME/Library/Android/sdk/ndk/28.2.13676358" \
+npx tauri android build --apk --target aarch64
 ```
 
-### Шаг 2: Открытие в Android Studio
-Выполните команду для автоматического открытия Android Studio:
-```bash
-npm run android:open
-```
-*Или откройте Android Studio вручную и выберите директорию `android/`.*
+APK появится в `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk`.
 
-### Шаг 3: Сборка APK
-1. Дождитесь завершения Gradle-синхронизации в Android Studio.
-2. Подключите телефон по USB с включенным режимом отладки и нажмите кнопку **Run** для прямой установки.
-3. Либо выберите в верхнем меню: **Build** -> **Build Bundle(s) / APK(s)** -> **Build APK(s)** для генерации готового установочного файла `app-debug.apk`.
+> **Подпись:** релизный keystore убран из репозитория (см. PR #1). APK собирается unsigned. Для подписи настройте `android/local.properties` (gitignored) с `RELEASE_STORE_FILE`/`RELEASE_STORE_PASSWORD`/`RELEASE_KEY_ALIAS`/`RELEASE_KEY_PASSWORD`.
+
+### SAF-мост
+Нативные операции с файлами (выбор папки, листинг, метаданные, импорт, удаление) на Android идут через Storage Access Framework — Kotlin-плагин `ComiFlowBridge.kt`. Его исходник живёт в `src-tauri/mobile/android/` (вне регенерируемого `gen/`), а `setup-android-plugin.sh` копирует его на место. Команды в `src-tauri/src/lib.rs` cfg-gate'ом разводят вызовы: Android → SAF-плагин, desktop → `std::fs`.
+
