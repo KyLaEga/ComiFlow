@@ -102,6 +102,12 @@ struct AndroidChunkResp {
     #[serde(rename = "importId")]
     import_id: String,
 }
+#[cfg(target_os = "android")]
+#[derive(Deserialize)]
+struct AndroidPendingFileResp {
+    uri: Option<String>,
+    name: Option<String>,
+}
 
 // ── Shared JSON shapes ────────────────────────────────────────────────────
 // Десктопные структуры/функции не используются на Android-таргете (там всё
@@ -774,9 +780,32 @@ fn cancel_chunked_import(
     }
 }
 
+/// Файл, открытый «извне» через ACTION_VIEW (CBZ/PDF из файлового менеджера).
+/// Android: MainActivity ловит интент (cold/warm start) и отдаёт через мост
+/// takePendingFile (одноразово — после чтения сбрасывается). Desktop: нет.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+#[derive(Serialize)]
+struct PendingFile {
+    uri: String,
+    name: Option<String>,
+}
+
 #[tauri::command]
-fn get_pending_file_uri() -> Option<String> {
-    None
+fn get_pending_file_uri(app: tauri::AppHandle) -> Option<PendingFile> {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(bridge) = android_bridge(&app) {
+            let resp: Option<AndroidPendingFileResp> = bridge.call("takePendingFile", serde_json::json!({}));
+            return resp.and_then(|r| r.uri.map(|uri| PendingFile { uri, name: r.name }));
+        }
+        return None;
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        None
+    }
 }
 
 /// Включает/выключает «читательские» жесты: пока читалка открыта, боковые

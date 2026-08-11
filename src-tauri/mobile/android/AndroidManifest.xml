@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- AndroidTV support -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <application
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.app"
+        android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:label="@string/main_activity_title"
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- AndroidTV support -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- Открытие CBZ/PDF напрямую: файловый менеджер → ComiFlow.
+                 Каждый <data> — полная комбинация (схема + тип), фильтр
+                 срабатывает при совпадении с любой из них. CBZ-менеджеры
+                 отдают разные MIME: vnd.comicbook+zip, x-cbz, а часто просто
+                 octet-stream/zip — ловим все, PDF — по application/pdf. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/vnd.comicbook+zip" />
+                <data android:scheme="file" android:mimeType="application/vnd.comicbook+zip" />
+                <data android:scheme="content" android:mimeType="application/x-cbz" />
+                <data android:scheme="file" android:mimeType="application/x-cbz" />
+                <data android:scheme="content" android:mimeType="application/zip" android:pathPattern=".*\\.cbz" />
+                <data android:scheme="file" android:mimeType="application/zip" android:pathPattern=".*\\.cbz" />
+                <data android:scheme="content" android:mimeType="application/octet-stream" android:pathPattern=".*\\.cbz" />
+                <data android:scheme="file" android:mimeType="application/octet-stream" android:pathPattern=".*\\.cbz" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/pdf" />
+                <data android:scheme="file" android:mimeType="application/pdf" />
+            </intent-filter>
+        </activity>
+
+        <provider
+          android:name="androidx.core.content.FileProvider"
+          android:authorities="${applicationId}.fileprovider"
+          android:exported="false"
+          android:grantUriPermissions="true">
+          <meta-data
+            android:name="android.support.FILE_PROVIDER_PATHS"
+            android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

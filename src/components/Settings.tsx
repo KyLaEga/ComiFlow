@@ -1,18 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Sun, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2, Gauge, Palette, Archive, SkipForward } from 'lucide-react';
+import { X, Sun, Moon, Monitor, Eye, Contrast, Layout, ArrowRightLeft, BookOpen, Volume2, Trash2, Gauge, Palette, Archive, SkipForward } from 'lucide-react';
 import { confirmDialog } from '../utils/nativeBridge';
 
+export type LightThemeId =
+  | 'light-slate' | 'light-nord' | 'light-midnight' | 'light-dracula' | 'light-sepia'
+  | 'light-evergreen' | 'light-amber' | 'light-sakura' | 'light-cyberpunk';
+
+export type DarkThemeId =
+  | 'dark-slate' | 'dark-nord' | 'dark-midnight' | 'dark-dracula' | 'dark-sepia'
+  | 'dark-evergreen' | 'dark-amber' | 'dark-sakura' | 'dark-cyberpunk';
+
 export interface ReaderSettings {
-  theme: 'light-slate' | 'dark-slate' | 'oled-slate' | 
-         'light-nord' | 'dark-nord' | 'oled-nord' | 
-         'light-midnight' | 'dark-midnight' | 'oled-midnight' | 
-         'light-dracula' | 'dark-dracula' | 'oled-dracula' | 
-         'light-sepia' | 'dark-sepia' | 'oled-sepia' | 
-         'light-evergreen' | 'dark-evergreen' | 'oled-evergreen' | 
-         'light-amber' | 'dark-amber' | 'oled-amber' | 
-         'light-sakura' | 'dark-sakura' | 'oled-sakura' | 
-         'light-cyberpunk' | 'dark-cyberpunk' | 'oled-cyberpunk' | 
-         'system';
+  /** Режим темы (как в ежедневнике): светлая / тёмная / системная. */
+  themeMode: 'light' | 'dark' | 'system';
+  /** Предпочтительная светлая тема (применяется в светлом режиме). */
+  preferredLightTheme: LightThemeId;
+  /** Предпочтительная тёмная тема (применяется в тёмном режиме). */
+  preferredDarkTheme: DarkThemeId;
+  /** Тёмный режим использует oled-вариант темы (чистый чёрный). */
+  useOledForDarkMode: boolean;
   direction: 'ltr' | 'rtl';
   mode: 'paged' | 'webtoon';
   fitMode: 'contain' | 'width' | 'height';
@@ -70,62 +76,42 @@ const IMAGE_PRESETS = [50, 75, 100, 125, 150];
 const AUTO_SPEED_PRESETS = [0.5, 1, 1.5, 2, 3, 4, 5, 8, 10];
 const formatSpeed = (s: number): string => `${s % 1 === 0 ? s : s.toFixed(1)} с`;
 
-// ── Карточки тем ────────────────────────────────────────────────────────────
-// Цвета (bg/accent/text) для превью каждой семьи берём из universal-themes.css,
-// чтобы карточка показывала реальную палитру темы, а не условные «свотчи».
-interface ThemeVariantColors {
+// ── Свотчи тем (канон Universal UI theme-status, как в ежедневнике) ────────
+// У каждой семьи: акцентная точка + светлый/тёмный вариант (bg/text для
+// превью свотча). OLED-варианты не показываются отдельными свотчами — они
+// включаются переключателем «OLED (True Black)» для тёмного режима.
+interface ThemeSwatchColors {
   bg: string;
-  accent: string;
   text: string;
 }
-interface ThemeFamily {
-  value: string;
+interface ThemeFamilySwatches {
+  family: string;
   label: string;
-  light: ThemeVariantColors;
-  dark: ThemeVariantColors;
-  oled: ThemeVariantColors;
+  accent: string;
+  light: ThemeSwatchColors;
+  dark: ThemeSwatchColors;
 }
 
-const THEME_FAMILIES: ThemeFamily[] = [
-  { value: 'slate', label: 'Slate',
-    light: { bg: '#f4f5f7', accent: '#4c5699', text: '#1f2329' },
-    dark:  { bg: '#0f1013', accent: '#4c5699', text: '#f2f3f5' },
-    oled:  { bg: '#000000', accent: '#4c5699', text: '#f2f3f5' } },
-  { value: 'nord', label: 'Nord',
-    light: { bg: '#eceff4', accent: '#5e81ac', text: '#2e3440' },
-    dark:  { bg: '#2e3440', accent: '#5e81ac', text: '#eceff4' },
-    oled:  { bg: '#000000', accent: '#5e81ac', text: '#eceff4' } },
-  { value: 'midnight', label: 'Токио',
-    light: { bg: '#f0f4fe', accent: '#7aa2f7', text: '#1a1b26' },
-    dark:  { bg: '#1a1b26', accent: '#7aa2f7', text: '#c0caf5' },
-    oled:  { bg: '#000000', accent: '#7aa2f7', text: '#c0caf5' } },
-  { value: 'dracula', label: 'Dracula',
-    light: { bg: '#f6f3fc', accent: '#bd93f9', text: '#282a36' },
-    dark:  { bg: '#282a36', accent: '#bd93f9', text: '#f8f8f2' },
-    oled:  { bg: '#000000', accent: '#bd93f9', text: '#f8f8f2' } },
-  { value: 'sepia', label: 'Сепия',
-    light: { bg: '#fcfaf2', accent: '#a0522d', text: '#433422' },
-    dark:  { bg: '#1e1b18', accent: '#a0522d', text: '#efebe4' },
-    oled:  { bg: '#000000', accent: '#a0522d', text: '#efebe4' } },
-  { value: 'evergreen', label: 'Evergreen',
-    light: { bg: '#f1f7f4', accent: '#2d6a4f', text: '#1c2e24' },
-    dark:  { bg: '#0f1a14', accent: '#2d6a4f', text: '#e2e8e6' },
-    oled:  { bg: '#000000', accent: '#2d6a4f', text: '#e2e8e6' } },
-  { value: 'amber', label: 'Янтарь',
-    light: { bg: '#fffdf5', accent: '#d35400', text: '#3d321d' },
-    dark:  { bg: '#1a130f', accent: '#d35400', text: '#fdf5f0' },
-    oled:  { bg: '#000000', accent: '#d35400', text: '#fdf5f0' } },
-  { value: 'sakura', label: 'Сакура',
-    light: { bg: '#fff0f5', accent: '#d87093', text: '#5c2c3a' },
-    dark:  { bg: '#1f1619', accent: '#d87093', text: '#ffd1dc' },
-    oled:  { bg: '#000000', accent: '#d87093', text: '#ffd1dc' } },
-  { value: 'cyberpunk', label: 'Киберпанк',
-    light: { bg: '#fcf5fa', accent: '#ff007f', text: '#2c003e' },
-    dark:  { bg: '#0e0d16', accent: '#ff007f', text: '#ffffff' },
-    oled:  { bg: '#000000', accent: '#ff007f', text: '#ffffff' } },
+const THEME_FAMILIES: ThemeFamilySwatches[] = [
+  { family: 'slate', label: 'Slate', accent: '#4c5699',
+    light: { bg: '#f4f5f7', text: '#1f2329' }, dark: { bg: '#0f1013', text: '#f2f3f5' } },
+  { family: 'nord', label: 'Nord', accent: '#5e81ac',
+    light: { bg: '#eceff4', text: '#2e3440' }, dark: { bg: '#2e3440', text: '#eceff4' } },
+  { family: 'midnight', label: 'Токио', accent: '#3060e8',
+    light: { bg: '#f0f4fe', text: '#1a1b26' }, dark: { bg: '#1a1b26', text: '#c0caf5' } },
+  { family: 'dracula', label: 'Dracula', accent: '#9444d6',
+    light: { bg: '#f6f3fc', text: '#282a36' }, dark: { bg: '#282a36', text: '#f8f8f2' } },
+  { family: 'sepia', label: 'Сепия', accent: '#a0522d',
+    light: { bg: '#fcfaf2', text: '#433422' }, dark: { bg: '#1e1b18', text: '#efebe4' } },
+  { family: 'evergreen', label: 'Evergreen', accent: '#2d6a4f',
+    light: { bg: '#f1f7f4', text: '#1c2e24' }, dark: { bg: '#0f1a14', text: '#e2e8e6' } },
+  { family: 'amber', label: 'Янтарь', accent: '#d35400',
+    light: { bg: '#fffdf5', text: '#3d321d' }, dark: { bg: '#1a130f', text: '#fdf5f0' } },
+  { family: 'sakura', label: 'Сакура', accent: '#d87093',
+    light: { bg: '#fff0f5', text: '#5c2c3a' }, dark: { bg: '#1f1619', text: '#ffd1dc' } },
+  { family: 'cyberpunk', label: 'Киберпанк', accent: '#ff007f',
+    light: { bg: '#fcf5fa', text: '#2c003e' }, dark: { bg: '#0e0d16', text: '#ffffff' } },
 ];
-
-const THEME_VARIANT_LABELS = { light: 'Светлые', dark: 'Тёмные', oled: 'OLED' } as const;
 
 interface SettingsProps {
   isOpen: boolean;
@@ -458,47 +444,133 @@ export const Settings: React.FC<SettingsProps> = ({
         )}
 
         {/* ══ ВКЛАДКА: ОФОРМЛЕНИЕ ══ */}
-        {activeTab === 'appearance' && (
+        {activeTab === 'appearance' && (() => {
+          // Текущий тёмный режим (для активного свотча и подписей).
+          const systemIsDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const darkMode = settings.themeMode === 'dark' || (settings.themeMode === 'system' && systemIsDark);
+          const resolvedTheme = darkMode
+            ? (settings.useOledForDarkMode
+                ? settings.preferredDarkTheme.replace(/^dark-/, 'oled-')
+                : settings.preferredDarkTheme)
+            : settings.preferredLightTheme;
+          // Активный свотч: применённая тема без oled-префикса (OLED — галочкой).
+          const activeBase = resolvedTheme.replace(/^oled-/, 'dark-');
+          const darkLabel = settings.useOledForDarkMode
+            ? `${settings.preferredDarkTheme.replace(/^dark-/, 'OLED ')}`
+            : settings.preferredDarkTheme;
+
+          const modes: { mode: ReaderSettings['themeMode']; icon: React.ReactNode; label: string }[] = [
+            { mode: 'light', icon: <Sun size={13} />, label: 'Светлая' },
+            { mode: 'dark', icon: <Moon size={13} />, label: 'Тёмная' },
+            { mode: 'system', icon: <Monitor size={13} />, label: 'Системная' },
+          ];
+
+          // Клик по свотчу: ставит предпочтение и переключает режим на этот
+          // вариант (светлый свотч → светлый режим, тёмный → тёмный).
+          const handleSwatch = (id: string) => {
+            if (id.startsWith('light-')) {
+              onUpdateSettings({ preferredLightTheme: id as LightThemeId, themeMode: 'light' });
+            } else {
+              onUpdateSettings({ preferredDarkTheme: id as DarkThemeId, themeMode: 'dark' });
+            }
+          };
+
+          return (
           <div className="settings-section">
             <span className="settings-section-title">Тема оформления</span>
 
-            {/* Авто (системная) */}
-            <button
-              className={`theme-card ${settings.theme === 'system' ? 'selected' : ''}`}
-              onClick={() => onUpdateSettings({ theme: 'system' as ReaderSettings['theme'] })}
-              style={{ width: 'calc(33.33% - 6px)', minWidth: '104px' }}
-            >
-              <div
-                className="theme-card-preview"
-                style={{ background: 'linear-gradient(135deg, #f4f5f7 50%, #0f1013 50%)' }}
-              >
-                <div className="theme-card-line" style={{ background: '#1f2329', opacity: 0.35, width: '70%' }} />
-                <div className="theme-card-line" style={{ background: '#1f2329', opacity: 0.2, width: '45%' }} />
-                <div className="theme-card-dot" style={{ background: '#4c5699' }} />
+            {/* Статус: активная тема + кнопки режима + карточки предпочтений */}
+            <div className="theme-status">
+              <div className="theme-status-head">
+                <div>
+                  <h4 className="theme-status-title">Оформление</h4>
+                  <p className="theme-status-subtitle">
+                    Активная тема: <strong>{resolvedTheme}</strong>
+                  </p>
+                </div>
+                <div className="theme-status-modes">
+                  {modes.map((m) => (
+                    <button
+                      key={m.mode}
+                      className={`theme-status-mode-btn ${settings.themeMode === m.mode ? 'active' : ''}`}
+                      onClick={() => onUpdateSettings({ themeMode: m.mode })}
+                    >
+                      {m.icon} {m.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <span className="theme-card-label">Авто (системная)</span>
-            </button>
+              <div className="theme-status-grid">
+                <div className="theme-status-pref">
+                  <div>
+                    <span className="theme-status-pref-label">Светлая:</span>
+                    <span className="theme-status-pref-value">{settings.preferredLightTheme}</span>
+                  </div>
+                  <span className={`theme-status-tag ${darkMode ? 'saved' : 'active'}`}>
+                    {darkMode ? 'сохранена' : '✓ активна'}
+                  </span>
+                </div>
+                <div className="theme-status-pref">
+                  <div>
+                    <span className="theme-status-pref-label">Тёмная:</span>
+                    <span className="theme-status-pref-value">{darkLabel}</span>
+                  </div>
+                  <span className={`theme-status-tag ${darkMode ? 'active' : 'saved'}`}>
+                    {darkMode ? '✓ активна' : 'сохранена'}
+                  </span>
+                </div>
+              </div>
+            </div>
 
-            {/* Семьи тем по вариантам: Светлые / Тёмные / OLED */}
-            {(['light', 'dark', 'oled'] as const).map((variant) => (
-              <div key={variant} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span className="theme-group-title">{THEME_VARIANT_LABELS[variant]}</span>
-                <div className="theme-card-grid">
-                  {THEME_FAMILIES.map((f) => {
-                    const c = f[variant];
-                    const value = `${variant}-${f.value}`;
+            {/* OLED (True Black) — галочкой, как в ежедневнике */}
+            <div className="theme-status-oled">
+              <div>
+                <h4 className="theme-status-oled-title">OLED (True Black)</h4>
+                <p className="theme-status-oled-desc">Чистый чёрный фон для тёмного режима</p>
+              </div>
+              <label className="switch-control">
+                <input
+                  type="checkbox"
+                  checked={settings.useOledForDarkMode}
+                  onChange={(e) => onUpdateSettings({ useOledForDarkMode: e.target.checked })}
+                />
+                <span className="switch-slider"></span>
+              </label>
+            </div>
+
+            {/* Семейства: акцентная точка + свотчи светлой/тёмной темы */}
+            {THEME_FAMILIES.map((f) => (
+              <div className="theme-family" key={f.family}>
+                <h4 className="theme-family-label">
+                  <span className="theme-family-dot" style={{ background: f.accent }} />
+                  {f.label}
+                </h4>
+                <div className="theme-swatches">
+                  {(
+                    [
+                      { id: `light-${f.family}`, name: 'Light', colors: f.light },
+                      { id: `dark-${f.family}`, name: 'Dark', colors: f.dark },
+                    ] as const
+                  ).map((m) => {
+                    const isLight = m.id.startsWith('light-');
+                    const active = isLight
+                      ? settings.preferredLightTheme === m.id
+                      : activeBase === m.id;
                     return (
                       <button
-                        key={value}
-                        className={`theme-card ${settings.theme === value ? 'selected' : ''}`}
-                        onClick={() => onUpdateSettings({ theme: value as ReaderSettings['theme'] })}
+                        key={m.id}
+                        className={`theme-swatch ${active ? 'active' : ''}`}
+                        style={{ background: m.colors.bg, color: m.colors.text }}
+                        onClick={() => handleSwatch(m.id)}
+                        title={`${f.label} · ${m.name}`}
                       >
-                        <div className="theme-card-preview" style={{ background: c.bg }}>
-                          <div className="theme-card-line" style={{ background: c.text, opacity: 0.35, width: '70%' }} />
-                          <div className="theme-card-line" style={{ background: c.text, opacity: 0.2, width: '45%' }} />
-                          <div className="theme-card-dot" style={{ background: c.accent }} />
-                        </div>
-                        <span className="theme-card-label">{f.label}</span>
+                        <span className="theme-swatch-colors">
+                          <span style={{ background: m.colors.bg }} />
+                          <span style={{ background: f.accent }} />
+                          <span style={{ background: m.colors.text }} />
+                        </span>
+                        <span className="theme-swatch-name">{m.name}</span>
+                        {active && <span className="theme-swatch-check">✓</span>}
                       </button>
                     );
                   })}
@@ -506,7 +578,8 @@ export const Settings: React.FC<SettingsProps> = ({
               </div>
             ))}
           </div>
-        )}
+          );
+        })()}
 
         {/* ══ ВКЛАДКА: ХРАНИЛИЩЕ ══ */}
         {activeTab === 'storage' && (

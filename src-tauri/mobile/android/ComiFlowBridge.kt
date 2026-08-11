@@ -35,6 +35,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -916,6 +917,22 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
     // ════════════════════════════════════════════════════════════════════
 
     @Command
+    fun takePendingFile(invoke: Invoke) {
+        // Файл из ACTION_VIEW (см. MainActivity.captureViewIntent). Одноразово:
+        // прочитали — сбросили, чтобы повторный вызов не отдавал старый файл.
+        val uri = PendingViewFile.uri
+        val name = PendingViewFile.name
+        PendingViewFile.uri = null
+        PendingViewFile.name = null
+        invoke.resolve(
+            JSObject().apply {
+                put("uri", uri ?: JSONObject.NULL)
+                put("name", name ?: JSONObject.NULL)
+            }
+        )
+    }
+
+    @Command
     fun importFileToLibrary(invoke: Invoke) {
         try {
             val args = invoke.parseArgs(ImportArgs::class.java)
@@ -925,16 +942,36 @@ class ComiFlowBridge(private val activity: Activity) : Plugin(activity) {
             }
             val mime = when {
                 args.destFileName?.lowercase()?.endsWith(".pdf") == true -> "application/pdf"
-                else -> "application/zip"
+                // vnd.comicbook+zip — без маппинга расширений в MimeTypeMap:
+                // провайдер НЕ добавит ".zip" к имени (application/zip — добавляет,
+                // и импортированный "X.cbz" превращался в "X.cbz.zip").
+                else -> "application/vnd.comicbook+zip"
             }
             val newFile = folder.createFile(mime, args.destFileName ?: "file") ?: run {
                 invoke.reject("create failed"); return
             }
-            FileInputStream(File(args.sourcePath ?: "")).use { input ->
+            // Источник может быть content:// (файл открыт извне через
+            // ACTION_VIEW) — такой URI нельзя читать как File, только через
+            // ContentResolver. file:// тоже приходит из интентов — срезаем
+            // схему. Обычный путь (десктоп-импорт) — FileInputStream.
+            val source = args.sourcePath ?: ""
+            val sourcePath = when {
+                source.startsWith("content://") -> source
+                source.startsWith("file://") -> Uri.parse(source).path ?: source
+                else -> source
+            }
+            val input: InputStream = if (sourcePath.startsWith("content://")) {
+                activity.contentResolver.openInputStream(Uri.parse(sourcePath)) ?: run {
+                    invoke.reject("cannot read source"); return
+                }
+            } else {
+                FileInputStream(File(sourcePath))
+            }
+            input.use { inputStream ->
                 activity.contentResolver.openOutputStream(newFile.uri)?.use { output ->
                     val buf = ByteArray(8192)
-                    var n = input.read(buf)
-                    while (n != -1) { output.write(buf, 0, n); n = input.read(buf) }
+                    var n = inputStream.read(buf)
+                    while (n != -1) { output.write(buf, 0, n); n = inputStream.read(buf) }
                 }
             }
             invoke.resolve(JSObject().apply { put("ok", true) })

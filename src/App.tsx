@@ -65,40 +65,21 @@ if (isTauri()) {
 
 const LOCAL_STORAGE_KEY = 'comiflow_settings';
 
-/** All valid Universal UI theme ids (kept in sync with universal-themes.css). */
-const VALID_THEMES = new Set<ReaderSettings['theme']>([
-  'system',
-  'light-slate', 'dark-slate', 'oled-slate',
-  'light-nord', 'dark-nord', 'oled-nord',
-  'light-midnight', 'dark-midnight', 'oled-midnight',
-  'light-dracula', 'dark-dracula', 'oled-dracula',
-  'light-sepia', 'dark-sepia', 'oled-sepia',
-  'light-evergreen', 'dark-evergreen', 'oled-evergreen',
-  'light-amber', 'dark-amber', 'oled-amber',
-  'light-sakura', 'dark-sakura', 'oled-sakura',
-  'light-cyberpunk', 'dark-cyberpunk', 'oled-cyberpunk',
-]);
-
-/** Map legacy (pre-Universal-UI) theme names to current ones. */
-const LEGACY_THEME_MAP: Record<string, ReaderSettings['theme']> = {
+/** Старые имена тем до Universal UI (одно слово) → текущие id. */
+const LEGACY_THEME_ALIASES: Record<string, string> = {
   light: 'light-slate',
   dark: 'dark-slate',
   purple: 'dark-midnight',
   'light-purple': 'light-midnight',
   midnight: 'dark-midnight',
-  oled: 'oled-slate',
+  oled: 'dark-slate',
 };
 
-/** Validate / migrate a stored theme value; falls back to 'system'. */
-function normalizeTheme(raw: unknown): ReaderSettings['theme'] {
-  if (typeof raw !== 'string') return 'system';
-  if (VALID_THEMES.has(raw as ReaderSettings['theme'])) return raw as ReaderSettings['theme'];
-  if (LEGACY_THEME_MAP[raw]) return LEGACY_THEME_MAP[raw];
-  return 'system';
-}
-
 const DEFAULT_SETTINGS: ReaderSettings = {
-  theme: 'system',
+  themeMode: 'system',
+  preferredLightTheme: 'light-slate',
+  preferredDarkTheme: 'dark-slate',
+  useOledForDarkMode: false,
   direction: 'ltr',
   mode: 'paged',
   fitMode: 'contain',
@@ -125,7 +106,20 @@ const setStoredFolder = (uri: string) => localStorage.setItem(FOLDER_STORAGE_KEY
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
   const [libraryFolderUri, setLibraryFolderUri] = useState<string | null>(null);
+  // Реф папки: init-эффект (холодный старт с файлом из интента) выполняется
+  // раньше, чем стейт обновится — обработчик файла читает СВЕЖЕЕ значение.
+  const libraryFolderUriRef = useRef<string | null>(null);
+  useEffect(() => {
+    libraryFolderUriRef.current = libraryFolderUri;
+  }, [libraryFolderUri]);
   const [comics, setComics] = useState<ComicMetadata[]>([]);
+  // Реф списка: обработчики, вызванные из init-эффекта (холодный старт с
+  // файлом из интента), работают на замыкании первого рендера, где стейт
+  // пуст — читаем свежее значение через реф.
+  const comicsRef = useRef<ComicMetadata[]>([]);
+  useEffect(() => {
+    comicsRef.current = comics;
+  }, [comics]);
   const [activeComicId, setActiveComicId] = useState<string | null>(null);
   const [activeComicFile, setActiveComicFile] = useState<Blob | null>(null);
 
@@ -222,26 +216,59 @@ function App() {
   }, []);
 
   // Open file from a path (Tauri) — used for file-association intents.
-  const handleOpenFileFromPath = async (filePath: string) => {
-    if (!libraryFolderUri) {
+  // externalName — имя файла от Android (content:// не содержит имени в пути).
+  const handleOpenFileFromPath = async (filePath: string, externalName?: string) => {
+    // Через реф: при холодном старте вызов приходит из init-эффекта, где
+    // стейт папки ещё null, хотя папка уже восстановлена из localStorage.
+    const folder = libraryFolderUriRef.current;
+    if (!folder) {
       await messageDialog('Сначала выберите папку библиотеки, чтобы открывать файлы извне.');
+      return;
+    }
+
+    // Файл уже в библиотеке (открыли из той же папки) — копия не нужна.
+    // URI из интента приходит без tree-префикса, а у комикса он есть —
+    // сравниваем по document-id (часть после /document/).
+    const sameDocument = (a: string, b: string) => {
+      try {
+        const docOf = (u: string) => decodeURIComponent(u).split('/document/').pop() || u;
+        return docOf(a) === docOf(b);
+      } catch {
+        return a === b;
+      }
+    };
+    const existing = comics.find(c => sameDocument(c.uri, filePath));
+    if (existing) {
+      await handleSelectComic(existing.id);
       return;
     }
 
     setIsImporting(true);
     setImportProgress('Добавление файла в библиотеку...');
     try {
-      const cleanName = filePath.split(/[/\\]/).pop() || 'imported_file';
+      const cleanName = externalName?.trim()
+        || decodeURIComponent(filePath).split('/').pop()
+        || filePath.split(/[/\\]/).pop()
+        || 'imported_file';
 
-      const ok = await importFileToLibrary(filePath, cleanName, libraryFolderUri);
+      const ok = await importFileToLibrary(filePath, cleanName, folder);
       if (ok) {
-        await syncLibrary(libraryFolderUri);
+        await syncLibrary(folder);
 
         const list = await getAllComics();
         setComics(list);
+        // Синхронизируем реф сразу: handleSelectComic ниже читает его, а
+        // рендер со свежим стейтом ещё не произошёл.
+        comicsRef.current = list;
 
-        // Find the newly added comic
-        const newComic = list.find(c => c.title === cleanName || c.uri.includes(cleanName));
+        // Find the newly added comic. Имя из интента может отличаться от
+        // названия в библиотеке (расширение, кодировка %20) — сравниваем по
+        // декодированному URI, а не по title.
+        const cleanLower = cleanName.toLowerCase();
+        const newComic = list.find(c =>
+          c.title?.toLowerCase() === cleanLower ||
+          decodeURIComponent(c.uri).toLowerCase().includes(cleanLower)
+        );
         if (newComic) {
           await handleSelectComic(newComic.id);
         }
@@ -396,9 +423,45 @@ function App() {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          // Migrate legacy theme names and drop invalid values so a stale
-          // 'light'/'dark' from the old app never breaks light themes.
-          const normalizedTheme = normalizeTheme(parsed.theme);
+          // Миграция старой одиночной темы ('system'|'light-X'|'dark-X'|
+          // 'oled-X') → модель ежедневника: режим + предпочтения светлой и
+          // тёмной темы + флаг OLED для тёмного режима. OLED-вариант
+          // превращается в тёмную тему + useOledForDarkMode (тот же вид).
+          if (parsed.theme !== undefined) {
+            const legacy = parsed.theme;
+            if (legacy === 'system') {
+              parsed.themeMode = 'system';
+            } else if (typeof legacy === 'string' && legacy.startsWith('oled-')) {
+              parsed.themeMode = 'dark';
+              parsed.preferredDarkTheme = `dark-${legacy.slice(5)}`;
+              parsed.useOledForDarkMode = true;
+            } else if (typeof legacy === 'string' && legacy.startsWith('light-')) {
+              parsed.themeMode = 'light';
+              parsed.preferredLightTheme = legacy;
+            } else if (typeof legacy === 'string' && legacy.startsWith('dark-')) {
+              parsed.themeMode = 'dark';
+              parsed.preferredDarkTheme = legacy;
+            }
+            // Legacy-имена старого приложения ('light'|'dark'|'purple'...).
+            else if (typeof legacy === 'string' && LEGACY_THEME_ALIASES[legacy]) {
+              const target = LEGACY_THEME_ALIASES[legacy];
+              if (target.startsWith('light-')) {
+                parsed.themeMode = 'light';
+                parsed.preferredLightTheme = target;
+              } else {
+                parsed.themeMode = 'dark';
+                parsed.preferredDarkTheme = target;
+              }
+            } else {
+              parsed.themeMode = 'system';
+            }
+            delete parsed.theme;
+          }
+          // Заполняем недостающее дефолтами (новые поля).
+          if (!parsed.themeMode) parsed.themeMode = DEFAULT_SETTINGS.themeMode;
+          if (!parsed.preferredLightTheme) parsed.preferredLightTheme = DEFAULT_SETTINGS.preferredLightTheme;
+          if (!parsed.preferredDarkTheme) parsed.preferredDarkTheme = DEFAULT_SETTINGS.preferredDarkTheme;
+          if (parsed.useOledForDarkMode === undefined) parsed.useOledForDarkMode = false;
           // Migrate legacy deletePhysicalFile: boolean → deleteMode enum.
           // Old "true" becomes 'permanent' (preserves previous behaviour);
           // anything else falls back to the safe default 'off'.
@@ -424,15 +487,15 @@ function App() {
           if (parsed.autoOpenNext === undefined) {
             parsed.autoOpenNext = false;
           }
-          setSettings({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme });
+          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
           if (parsed.volumeKeysEnabled !== undefined) {
             setVolumeKeyMode(parsed.volumeKeysEnabled);
           }
           // Persist the migration so we don't re-normalize every launch.
-          if (parsed.theme !== normalizedTheme || parsed.deletePhysicalFile !== undefined) {
+          if (parsed.theme !== undefined || parsed.deletePhysicalFile !== undefined) {
             localStorage.setItem(
               LOCAL_STORAGE_KEY,
-              JSON.stringify({ ...DEFAULT_SETTINGS, ...parsed, theme: normalizedTheme })
+              JSON.stringify({ ...DEFAULT_SETTINGS, ...parsed })
             );
           }
         } catch (e) {
@@ -447,6 +510,11 @@ function App() {
       // так библиотека не «зависает» пустой, если синк встречает битую
       // запись или старые данные из предыдущей версии.
       const storedFolder = getStoredFolder();
+      // Сразу и в реф: pending-файл из интента обрабатывается в этом же
+      // эффекте ниже, а useEffect-синхронизация рефа ещё не отработала.
+      if (storedFolder) {
+        libraryFolderUriRef.current = storedFolder;
+      }
       try {
         const [comicList, shelfList] = await Promise.all([getAllComics(), getAllShelves()]);
         if (cancelled) return;
@@ -466,8 +534,8 @@ function App() {
 
       // Check for file-association intent opening shortly after launch
       const pending = await getPendingFileUri();
-      if (pending) {
-        handleOpenFileFromPath(pending);
+      if (pending?.uri) {
+        handleOpenFileFromPath(pending.uri, pending.name || undefined);
       }
     })();
 
@@ -477,30 +545,49 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Apply Theme Attribute to HTML Element
+  // Тёплый старт: файл пришёл интентом, когда приложение уже открыто —
+  // Android шлёт событие comiflow:pendingFile (см. MainActivity.captureViewIntent),
+  // JS забирает файл тем же путём, что и холодный старт.
+  useEffect(() => {
+    const onPendingFile = () => {
+      getPendingFileUri()
+        .then((pending) => {
+          if (pending?.uri) {
+            handleOpenFileFromPath(pending.uri, pending.name || undefined);
+          }
+        })
+        .catch((err) => console.error('Failed to handle pending file:', err));
+    };
+    window.addEventListener('comiflow:pendingFile', onPendingFile);
+    return () => window.removeEventListener('comiflow:pendingFile', onPendingFile);
+  });
+
+  // Apply Theme Attribute to HTML Element.
+  // Модель как в ежедневнике: режим (светлая/тёмная/системная) + отдельные
+  // предпочтения светлой и тёмной темы; OLED — флаг, заменяющий тёмную тему
+  // на её oled-вариант (чистый чёрный).
   useEffect(() => {
     const applyTheme = () => {
-      let resolvedTheme = settings.theme;
-      if (settings.theme === 'system') {
-        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        resolvedTheme = isDark ? 'dark-slate' : 'light-slate';
-      }
-      document.documentElement.setAttribute('data-theme', resolvedTheme);
+      const systemIsDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const darkMode = settings.themeMode === 'dark' || (settings.themeMode === 'system' && systemIsDark);
+      const resolved = darkMode
+        ? (settings.useOledForDarkMode
+            ? settings.preferredDarkTheme.replace(/^dark-/, 'oled-')
+            : settings.preferredDarkTheme)
+        : settings.preferredLightTheme;
+      document.documentElement.setAttribute('data-theme', resolved);
     };
 
     applyTheme();
 
-    if (settings.theme === 'system') {
+    if (settings.themeMode === 'system') {
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-      const listener = (e: MediaQueryListEvent) => {
-        document.documentElement.setAttribute('data-theme', e.matches ? 'dark-slate' : 'light-slate');
-      };
-      mediaQuery.addEventListener('change', listener);
+      mediaQuery.addEventListener('change', applyTheme);
       return () => {
-        mediaQuery.removeEventListener('change', listener);
+        mediaQuery.removeEventListener('change', applyTheme);
       };
     }
-  }, [settings.theme]);
+  }, [settings.themeMode, settings.preferredLightTheme, settings.preferredDarkTheme, settings.useOledForDarkMode]);
 
   // Update Settings
   const handleUpdateSettings = useCallback((newSettings: Partial<ReaderSettings>) => {
@@ -710,7 +797,7 @@ function App() {
     setIsImporting(true);
     setImportProgress('Загрузка комикса из памяти устройства...');
     try {
-      let comic = comics.find((c) => c.id === id);
+      let comic = comicsRef.current.find((c) => c.id === id);
       if (!comic) throw new Error('Комикс не найден.');
 
       // Lazy load metadata if it was not processed yet

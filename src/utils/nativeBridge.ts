@@ -224,7 +224,7 @@ export async function importFileToLibrary(
     return await invoke<boolean>('import_file', {
       sourcePath,
       cleanName,
-      libraryFolderPath: libraryFolder,
+      libraryFolder: libraryFolder,
     });
   } catch (e) {
     console.error('Tauri importFileToLibrary error:', e);
@@ -270,11 +270,17 @@ export async function setReaderActive(active: boolean): Promise<void> {
   }
 }
 
-/** File-association pending URI — not used on desktop. */
-export async function getPendingFileUri(): Promise<string | null> {
+/** Файл, открытый «извне» через ACTION_VIEW (CBZ/PDF из файлового менеджера). */
+export interface PendingFile {
+  uri: string;
+  name: string | null;
+}
+
+/** File-association pending file — not used on desktop. */
+export async function getPendingFileUri(): Promise<PendingFile | null> {
   if (!isTauri()) return null;
   try {
-    return await invoke<string | null>('get_pending_file_uri');
+    return await invoke<PendingFile | null>('get_pending_file_uri');
   } catch {
     return null;
   }
